@@ -176,6 +176,7 @@
               ['$1']}]))).
 %%------------------------------------------------------------------------------
 %% for parallel mode
+-define(epmd_tries, 10).
 -define(epmd_not_running_response, "epmd: Cannot connect to local epmd\n").
 %%------------------------------------------------------------------------------
 -type links() :: ets:tid().
