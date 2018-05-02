@@ -67,15 +67,26 @@ start(Options, LogMsgs) ->
 
 %%------------------------------------------------------------------------------
 
-start_parallel(RawOptions) ->
-  Nodes = concuerror_nodes:start(RawOptions),
-  [Node|_Rest] = Nodes,
-  StartAux =
+start_parallel(RawOptions, Options, LogMsgs) ->
+  Nodes = concuerror_nodes:start(Options),
+  [_Node] = Nodes,
+  InitNode = node(),
+  ProcessGenerator = concuerror_callback:start_process_generator(),
+  Start =
     fun() ->
 	Status =
-	  case concuerror_options:finalize(RawOptions) of
-	    {ok, Options, LogMsgs} -> start(Options, LogMsgs);
-	    {exit, ExitStatus} -> ExitStatus
+	  case InitNode =:= node() of
+	    true ->
+	      GenOptions = [{process_generator, ProcessGenerator}|Options],
+	      start(GenOptions, LogMsgs);
+	    false ->
+	      case concuerror_options:finalize(RawOptions) of
+		{ok, SlaveOptions, SlaveLogMsgs} ->
+		  GenOptions = [{process_generator, ProcessGenerator}|SlaveOptions],
+		  start(GenOptions, SlaveLogMsgs);
+		{exit, ExitStatus} ->
+		  ExitStatus
+	      end
 	  end,
 	  exit(Status)
     end,
@@ -84,10 +95,14 @@ start_parallel(RawOptions) ->
   Ref1 = monitor(process, Pid1),
   ExitStatus =
   receive
-    {'DOWN', Ref, process, Pid, ExitStatus} ->
-      ok = concuerror_nodes:clear(Nodes),
-      ExitStatus
-  end.
+    {'DOWN', Ref1, process, Pid1, Exit} ->
+      Exit%% ;
+    %% {'DOWN', Ref2, process, Pid2, Exit} ->
+    %%   Exit
+  end,
+  ok = concuerror_callback:stop_process_generator(ProcessGenerator),
+  ok = concuerror_nodes:clear(Nodes),
+  ExitStatus.
 
 %%------------------------------------------------------------------------------
 

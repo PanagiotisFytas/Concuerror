@@ -23,6 +23,9 @@
 
 -export([explain_error/1]).
 
+%% Interface to concuerror.erl
+-export([start_process_generator/0, stop_process_generator/1]).
+
 %%------------------------------------------------------------------------------
 
 %% DEBUGGING SETTINGS
@@ -69,6 +72,10 @@
 
 -type status() :: 'running' | 'waiting' | 'exiting' | 'exited'.
 
+-record(generator_state, {
+          process_map :: maps:map()
+         }).
+
 -record(process_flags, {
           trap_exit = false  :: boolean(),
           priority  = normal :: 'low' | 'normal' | 'high' | 'max'
@@ -93,7 +100,9 @@
           monitors                    :: monitors(),
           event = none                :: 'none' | event(),
           notify_when_ready           :: {pid(), boolean()},
+          parallel                    :: boolean(),
           processes                   :: processes(),
+          process_generator           :: pid(),
           receive_counter = 1         :: pos_integer(),
           ref_queue = new_ref_queue() :: ref_queue_2(),
           scheduler                   :: pid(),
@@ -122,6 +131,8 @@ spawn_first_process(Options) ->
        logger         = ?opt(logger, Options),
        monitors       = ets:new(monitors, [bag, public]),
        notify_when_ready = {self(), true},
+       parallel       = ?opt(parallel, Options),
+       process_generator = ?opt(process_generator, Options),
        processes      = Processes = ?opt(processes, Options),
        scheduler      = self(),
        system_ets_entries = ets:new(system_ets_entries, [bag, public]),
@@ -130,8 +141,9 @@ spawn_first_process(Options) ->
       },
   system_processes_wrappers(Info),
   system_ets_entries(Info),
-  P = new_process(Info),
-  true = ets:insert(Processes, ?new_process(P, "P")),
+  FirstSymbol = "P",
+  P = new_process(Info, FirstSymbol),
+  true = ets:insert(Processes, ?new_process(P, FirstSymbol)),
   {DefLeader, _} = run_built_in(erlang, whereis, 1, [user], Info),
   true = ets:update_element(Processes, P, {?process_leader, DefLeader}),
   P.
@@ -737,7 +749,7 @@ run_built_in(erlang, SendAfter, 3, [Timeout, Dest, Msg], Info)
                   instant_delivery = true,
                   is_timer = Ref
                  },
-              NewP = new_process(TimerInfo),
+              NewP = new_process(TimerInfo, Symbol),
               true = ets:insert(Processes, ?new_process(NewP, Symbol)),
               NewP;
             [[OldP]] -> OldP
@@ -804,7 +816,7 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
             ets:match(Processes, ?process_match_symbol_to_pid(ChildSymbol))
           of
             [] ->
-              NewP = new_process(PassedInfo),
+              NewP = new_process(PassedInfo, ChildSymbol),
               true = ets:insert(Processes, ?new_process(NewP, ChildSymbol)),
               NewP;
             [[OldP]] -> OldP
@@ -1434,9 +1446,71 @@ delete_system_entries({T, Objs}, true) when is_list(Objs) ->
 delete_system_entries({T, O}, true) ->
   ets:delete_object(T, O).
 
-new_process(ParentInfo) ->
+new_process(ParentInfo, Symbol) ->
   Info = ParentInfo#concuerror_info{notify_when_ready = {self(), true}},
-  spawn_link(?MODULE, process_top_loop, [Info]).
+  case Info#concuerror_info.parallel of
+    false ->
+      spawn_link(?MODULE, process_top_loop, [Info]);
+    true ->
+      #concuerror_info{
+	 process_generator = ProcessGenerator,
+	 scheduler = Scheduler
+	} = Info,
+      ProcessGenerator ! {spawn_new, self(), Scheduler, node(), Symbol, Info},
+      receive
+	{new_process, P} ->
+	  link(P),
+	  P
+      end
+  end.
+
+%%------------------------------------------------------------------------------
+
+-spec start_process_generator() -> pid().
+
+start_process_generator() ->
+  Parent = self(),
+  Fun =
+    fun() ->
+        State = initialize_generator(),
+        Parent ! process_gen_ready,
+        generator_loop(State)
+    end,
+  P = spawn_link(Fun),
+  receive
+    process_gen_ready -> P
+   end.
+
+initialize_generator() ->
+  #generator_state{
+     process_map = maps:new()
+    }.
+ 
+generator_loop(State) ->
+  receive
+    {spawn_new, Parent, Scheduler, Node, Symbol, Info} ->
+      #generator_state{
+	 process_map = Map
+	} = State,
+      P = spawn(Node, ?MODULE, process_top_loop, [Info]),
+      Key = pid_to_list(Scheduler) ++ Symbol,
+      NewMap = maps:put(Key, P, Map),
+      Parent ! {new_process, P},
+      generator_loop(State#generator_state{process_map = NewMap});
+    {Pid, finish} ->
+      Pid ! done
+  end.
+
+-spec stop_process_generator(pid()) -> ok.
+
+stop_process_generator(ProcessGenerator) ->
+  ProcessGenerator ! {self(), finish},
+  receive
+    done ->
+      ok
+  end.
+
+%%------------------------------------------------------------------------------
 
 process_loop(#concuerror_info{delayed_notification = {true, Notification},
                               scheduler = Scheduler} = Info) ->
