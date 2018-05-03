@@ -90,9 +90,9 @@ start_parallel(RawOptions, Options, LogMsgs) ->
 	  end,
 	  exit(Status)
     end,
-  %{Pid1, Ref1} = spawn_monitor(Start),
-  Pid1 = spawn(_Node, Start),
-  Ref1 = monitor(process, Pid1),
+  {Pid1, Ref1} = spawn_monitor(Start),
+  %% Pid1 = spawn(_Node, Start),
+  %% Ref1 = monitor(process, Pid1),
   ExitStatus =
   receive
     {'DOWN', Ref1, process, Pid1, Exit} ->
