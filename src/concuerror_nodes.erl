@@ -15,11 +15,17 @@ start(Options) ->
   ok = start_epmd(?epmd_tries),
   _ = net_kernel:start([Name, shortnames]), %TODO check errors
   {ok, Host} = inet:gethostname(),
-  SchedulerNodeName = atom_to_list(Name) ++ "_1",
+  NamePrefix = atom_to_list(Name),
   Path = path_to_ebin(),
   Args = "-boot start_clean -noshell -pa " ++ Path,
+  NumberOfSlaves = 1,
+  start_slaves(Host, NamePrefix, Args, NumberOfSlaves).
+
+start_slaves(_, _, _, 0) -> [];
+start_slaves(Host, NamePrefix, Args, N) ->
+  SchedulerNodeName = NamePrefix ++ "_" ++ integer_to_list(N),
   {ok, Node} = slave:start(Host, SchedulerNodeName, Args),
-  [Node].
+  [Node|start_slaves(Host, NamePrefix, Args, N-1)].
 
 start_epmd(0) -> epmd_not_starting;
 start_epmd(TriesLeft) ->
