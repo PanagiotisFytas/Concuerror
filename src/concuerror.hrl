@@ -178,6 +178,8 @@
 %% for parallel mode
 -define(epmd_tries, 10).
 -define(epmd_not_running_response, "epmd: Cannot connect to local epmd\n").
+-define(max_pid_list(PidList1, PidList2),
+        pid_to_list(max(list_to_pid(PidList1), list_to_pid(PidList2)))).
 %%------------------------------------------------------------------------------
 -type links() :: ets:tid().
 

@@ -130,7 +130,7 @@ spawn_first_process(Options) ->
       },
   system_processes_wrappers(Info),
   system_ets_entries(Info),
-  P = new_process(Info),
+  P = new_process(Info, "P"),
   true = ets:insert(Processes, ?new_process(P, "P")),
   {DefLeader, _} = run_built_in(erlang, whereis, 1, [user], Info),
   true = ets:update_element(Processes, P, {?process_leader, DefLeader}),
@@ -737,7 +737,7 @@ run_built_in(erlang, SendAfter, 3, [Timeout, Dest, Msg], Info)
                   instant_delivery = true,
                   is_timer = Ref
                  },
-              NewP = new_process(TimerInfo),
+              NewP = new_process(TimerInfo, Symbol),
               true = ets:insert(Processes, ?new_process(NewP, Symbol)),
               NewP;
             [[OldP]] -> OldP
@@ -804,7 +804,7 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
             ets:match(Processes, ?process_match_symbol_to_pid(ChildSymbol))
           of
             [] ->
-              NewP = new_process(PassedInfo),
+              NewP = new_process(PassedInfo, ChildSymbol),
               true = ets:insert(Processes, ?new_process(NewP, ChildSymbol)),
               NewP;
             [[OldP]] -> OldP
@@ -1434,11 +1434,11 @@ delete_system_entries({T, Objs}, true) when is_list(Objs) ->
 delete_system_entries({T, O}, true) ->
   ets:delete_object(T, O).
 
-new_process(ParentInfo) ->
+new_process(ParentInfo, Symbol) ->
   #concuerror_info{process_spawner = ProcessSpawner} = ParentInfo,
   Info = ParentInfo#concuerror_info{notify_when_ready = {self(), true}},
   MFArgs = {?MODULE, process_top_loop, [Info]},
-  concuerror_process_spawner:spawn_link(ProcessSpawner, MFArgs).
+  concuerror_process_spawner:spawn_link(ProcessSpawner, MFArgs, Symbol).
 
 process_loop(#concuerror_info{delayed_notification = {true, Notification},
                               scheduler = Scheduler} = Info) ->

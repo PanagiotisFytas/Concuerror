@@ -23,14 +23,17 @@
 run(RawOptions) ->
   maybe_cover_compile(),
   Status =
-    case ?opt(parallel, RawOptions) of
-      true ->
-	start_parallel(RawOptions);
-      _ ->
-	case concuerror_options:finalize(RawOptions) of
-	  {ok, Options, LogMsgs} -> start(Options, LogMsgs);
-	  {exit, ExitStatus} -> ExitStatus
-	end
+    case concuerror_options:finalize(RawOptions) of
+      {ok, Options, LogMsgs} ->
+        %% I should split finalize into two parts in order not to make  
+        %% unnecessary code repetitions
+        case ?opt(parallel, Options) of 
+          false ->
+            start(Options, LogMsgs);
+          true ->
+            start_parallel(RawOptions, Options)
+        end;
+      {exit, ExitStatus} -> ExitStatus
     end,
   maybe_cover_export(RawOptions),
   Status.
@@ -43,12 +46,18 @@ start(Options, LogMsgs) ->
   Estimator = concuerror_estimator:start_link(Options),
   LoggerOptions = [{estimator, Estimator},{processes, Processes}|Options],
   Logger = concuerror_logger:start(LoggerOptions),
-  ProcessSpawner = concuerror_process_spawner:start(Options),
   _ = [?log(Logger, Level, Format, Args) || {Level, Format, Args} <- LogMsgs],
   SchedulerOptions = 
-    [ {logger, Logger}
-    , {process_spawner, ProcessSpawner}
-      | LoggerOptions],
+    case ?opt(parallel, Options) of
+      false ->
+        ProcessSpawner = concuerror_process_spawner:start(Options),
+        [{logger, Logger}
+        , {process_spawner, ProcessSpawner}
+         | LoggerOptions];
+      true ->
+        [{logger, Logger} 
+         | LoggerOptions]
+    end,
   {Pid, Ref} =
     spawn_monitor(concuerror_scheduler, run, [SchedulerOptions]),
   Reason = receive {'DOWN', Ref, process, Pid, R} -> R end,
@@ -62,31 +71,46 @@ start(Options, LogMsgs) ->
   ?trace(Logger, "Reached the end!~n",[]),
   ExitStatus = concuerror_logger:stop(Logger, SchedulerStatus),
   concuerror_estimator:stop(Estimator),
-  concuerror_process_spawner:stop(ProcessSpawner),
+  concuerror_process_spawner:stop(SchedulerOptions),
   ets:delete(Processes),
   ExitStatus.
 
 %%------------------------------------------------------------------------------
 
-start_parallel(RawOptions) ->
+start_parallel(RawOptions, OldOptions) ->
   Nodes = concuerror_nodes:start(RawOptions),
-  [Node|_Rest] = Nodes,
+  [Node1,Node2] = Nodes,
+  % The the process_spawner starts and stops will be fixed when I make the
+  % process_spawner a gen_server
+  SpawnerOptions = [{nodes, Nodes}|OldOptions],
+  ProcessSpawner = concuerror_process_spawner:start(SpawnerOptions),
   StartAux =
     fun() ->
 	Status =
 	  case concuerror_options:finalize(RawOptions) of
-	    {ok, Options, LogMsgs} -> start(Options, LogMsgs);
+	    {ok, Options, LogMsgs} ->
+              ParallelOptions = [ {nodes, Nodes}
+                                , {process_spawner, ProcessSpawner} 
+                                  | Options],
+              start(ParallelOptions, LogMsgs);
 	    {exit, ExitStatus} -> ExitStatus
 	  end,
 	  exit(Status)
     end,
-  Pid = spawn(Node, StartAux),
-  Ref = monitor(process, Pid),
-  receive
-    {'DOWN', Ref, process, Pid, ExitStatus} ->
-      ok = concuerror_nodes:clear(Nodes),
-      ExitStatus
-  end.
+  Pid1 = spawn(Node1, StartAux),
+  Ref1 = monitor(process, Pid1),
+  Pid2 = spawn(Node2, StartAux),
+  Ref2 = monitor(process, Pid2),
+  ExitStatus = 
+    receive
+      {'DOWN', Ref1, process, Pid1, ExitStatus1} ->
+        ExitStatus1;
+      {'DOWN', Ref2, process, Pid2, ExitStatus2} -> 
+        ExitStatus2
+    end,
+  ok = concuerror_nodes:clear(Nodes),
+  concuerror_process_spawner:stop([{process_spawner, ProcessSpawner}]),
+  ExitStatus.
 
 %%------------------------------------------------------------------------------
 

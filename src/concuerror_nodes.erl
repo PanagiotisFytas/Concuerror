@@ -18,7 +18,7 @@ start(Options) ->
   NamePrefix = atom_to_list(Name),
   Path = path_to_ebin(),
   Args = "-boot start_clean -noshell -pa " ++ Path,
-  NumberOfSlaves = 1,
+  NumberOfSlaves = 2,
   start_slaves(Host, NamePrefix, Args, NumberOfSlaves).
 
 start_slaves(_, _, _, 0) -> [];

@@ -766,7 +766,7 @@ update_rate(RateInfo, TracesExplored) ->
 %%------------------------------------------------------------------------------
 
 to_stderr(Format, Data) ->
-  to_file(standard_error, Format, Data).
+  to_file(standard_io, Format, Data).
 
 to_file(disable, _, _) ->
   ok;
