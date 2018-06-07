@@ -285,3 +285,86 @@
          }).
 
 -type event() :: #event{}.
+
+%% definitions for transefarables records between nodes, basically the same thing byt
+%% let pids be strings so it can be transfered as a whole 
+
+-type message_id_trans() :: {pid(), pos_integer()} | 'hidden' | {string(), pos_integer()}.
+
+-record(message_trans, {
+          data    :: term(),
+          id      :: message_id_trans()
+         }).
+
+-type message_trans() :: #message_trans{}.
+
+-record(builtin_event_trans, {
+          actor = self()   :: pid() | string(),
+          extra            :: term(),
+          exiting = false  :: boolean(),
+          mfargs           :: mfargs(),
+          result           :: term(),
+          status = ok      :: 'ok' | {'crashed', term()} | 'unknown',
+          trapping = false :: boolean()
+         }).
+
+-type builtin_event_trans() :: #builtin_event_trans{}.
+
+-record(message_event_trans, {
+          cause_label      :: label(),
+          ignored = false  :: boolean(),
+          instant = true   :: boolean(),
+          killing = false  :: boolean(),
+          message          :: message_trans(),
+          receive_info     :: 'undefined' | 'not_received' | receive_info(),
+          recipient        :: pid() | string(),
+          sender = self()  :: pid() | string(),
+          trapping = false :: boolean(),
+          type = message   :: 'message' | 'exit_signal'
+         }).
+
+-type message_event_trans() :: #message_event_trans{}.
+
+-record(receive_event_trans, {
+          %% clause_location :: location(),
+          message            :: message_trans() | 'after',
+          receive_info       :: receive_info(),
+          recipient = self() :: pid() | string(),
+          timeout = infinity :: timeout(),
+          trapping = false   :: boolean()
+         }).
+
+-type receive_event_trans() :: #receive_event_trans{}.
+
+-record(exit_event_trans, {
+          actor = self()            :: pid() | reference() | string(),
+          last_status = running     :: running | waiting,
+          exit_by_signal = false    :: boolean(),
+          links = []                :: [pid()] | [string()],
+          monitors = []             :: [{reference(), pid()}] | {reference(), string()}, %% TODO figure out what to do here
+          name = ?process_name_none :: ?process_name_none | atom(),
+          reason = normal           :: term(),
+          stacktrace = []           :: [term()],
+          trapping = false          :: boolean()
+         }).
+
+-type exit_event_trans() :: #exit_event_trans{}.
+
+-type event_info_trans() ::
+        builtin_event_trans() |
+        exit_event_trans()    |
+        message_event_trans() |
+        receive_event_trans().
+
+-type channel_trans() :: {pid(), pid()} | {string(), string()}.
+-type actor_trans() :: pid() | channel_trans() | string().
+
+-record(event_trans, {
+          actor         :: 'undefined' | actor_trans(),
+          event_info    :: 'undefined' | event_info_trans(),
+          label         :: 'undefined' | label(),
+          location = [] :: location(),
+          special = []  :: [term()] %% XXX: Specify
+         }).
+
+-type event_trans() :: #event_trans{}.

@@ -114,7 +114,9 @@ wait_activation() ->
   receive
     {activate, {Module, Name, Args}} ->
       erlang:apply(Module, Name, Args);
-    stop -> ok
+    stop -> ok;
+    {Pid, stop} ->
+      Pid ! done
   end.
 
 discard_pids(TargetPid, TargetPid) ->
@@ -141,7 +143,9 @@ spawner_loop(State) ->
           spawner_loop(State#spawner_state{available_processes = NewProcessQueue})
       end;
     {Pid, cleanup} ->
-      _ = [IdleProcess ! stop || IdleProcess <- queue:to_list(ProcessQueue)],
+      %% TODO make this better
+      _ = [IdleProcess ! {self(), stop} || IdleProcess <- queue:to_list(ProcessQueue)],
+      _ = [receive done -> ok end || _ <- queue:to_list(ProcessQueue)],
       Pid ! done
   end.
 
@@ -176,7 +180,7 @@ master_loop(State) ->
           end
       end;
     {Pid, cleanup} ->
-      _ = [Spawner ! cleanup || {_, Spawner} <- SlaveSpawners],
+      _ = [Spawner ! {self(), cleanup} || Spawner <- SlaveSpawners],
       _ = [receive done -> ok end || _ <- SlaveSpawners],
       Pid ! done
   end.
@@ -212,19 +216,14 @@ spawn_link(ProcessSpawner, MFArgs, Symbol) ->
 
 %%-----------------------------------------------------------------------------
 
--spec stop(concuerror_options:options()) -> 'ok'.
+-spec stop(pid()) -> 'ok'.
 
-stop(Options) ->
-  ProcessSpawner = ?opt(process_spawner, Options),
-  case node() =:= node(ProcessSpawner) of
-    true ->
-      ProcessSpawner ! {self(), cleanup},
-      receive
-        done -> ok
-      end;
-    false ->
-      ok
+stop(ProcessSpawner) ->
+  ProcessSpawner ! {self(), cleanup},
+  receive
+    done -> ok
   end.
+
 %%-----------------------------------------------------------------------------
 
 -spec explain_error(term()) -> string().

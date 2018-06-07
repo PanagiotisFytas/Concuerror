@@ -42,20 +42,21 @@ run(RawOptions) ->
 
 start(Options, LogMsgs) ->
   error_logger:tty(false),
+  Parallel = ?opt(parallel, Options),
   Processes = ets:new(processes, [public]),
   Estimator = concuerror_estimator:start_link(Options),
   LoggerOptions = [{estimator, Estimator},{processes, Processes}|Options],
   Logger = concuerror_logger:start(LoggerOptions),
   _ = [?log(Logger, Level, Format, Args) || {Level, Format, Args} <- LogMsgs],
   SchedulerOptions = 
-    case ?opt(parallel, Options) of
+    case Parallel of
       false ->
         ProcessSpawner = concuerror_process_spawner:start(Options),
-        [{logger, Logger}
-        , {process_spawner, ProcessSpawner}
+        [{logger, Logger},
+         {process_spawner, ProcessSpawner}
          | LoggerOptions];
       true ->
-        [{logger, Logger} 
+        [{logger, Logger}
          | LoggerOptions]
     end,
   {Pid, Ref} =
@@ -71,7 +72,12 @@ start(Options, LogMsgs) ->
   ?trace(Logger, "Reached the end!~n",[]),
   ExitStatus = concuerror_logger:stop(Logger, SchedulerStatus),
   concuerror_estimator:stop(Estimator),
-  concuerror_process_spawner:stop(SchedulerOptions),
+  case Parallel of 
+    false ->
+      concuerror_process_spawner:stop(?opt(process_spawner, SchedulerOptions));
+    true ->
+      ok
+  end,
   ets:delete(Processes),
   ExitStatus.
 
@@ -83,6 +89,7 @@ start_parallel(RawOptions, OldOptions) ->
   % The the process_spawner starts and stops will be fixed when I make the
   % process_spawner a gen_server
   SpawnerOptions = [{nodes, Nodes}|OldOptions],
+  {Controller, ControllerRef} = spawn_monitor(fun() -> controller_initialize() end),
   ProcessSpawner = concuerror_process_spawner:start(SpawnerOptions),
   StartAux =
     fun() ->
@@ -90,6 +97,7 @@ start_parallel(RawOptions, OldOptions) ->
 	  case concuerror_options:finalize(RawOptions) of
 	    {ok, Options, LogMsgs} ->
               ParallelOptions = [ {nodes, Nodes}
+                                , {controller, Controller}
                                 , {process_spawner, ProcessSpawner} 
                                   | Options],
               start(ParallelOptions, LogMsgs);

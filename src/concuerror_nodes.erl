@@ -17,7 +17,8 @@ start(Options) ->
   {ok, Host} = inet:gethostname(),
   NamePrefix = atom_to_list(Name),
   Path = path_to_ebin(),
-  Args = "-boot start_clean -noshell -pa " ++ Path,
+  %%Args = "-boot start_clean -noshell -pa " ++ Path
+  Args = "-noshell -pa " ++ Path,
   NumberOfSlaves = 2,
   start_slaves(Host, NamePrefix, Args, NumberOfSlaves).
 
@@ -49,6 +50,9 @@ hashed_name(Args) ->
 clear([]) ->
   ok;
 clear([Node|Rest]) ->
+  false = node() =:= Node,
+  %%spawn(Node, erlang, halt, []),
+  %%io:fwrite("~s~n", [Node]),
   slave:stop(Node),
   clear(Rest).
 
