@@ -40,6 +40,9 @@ run(RawOptions) ->
 
 %%------------------------------------------------------------------------------
 
+-spec start(concuerror_options:options(),  concuerror_options:log_messages()) ->
+               exit_status().
+
 start(Options, LogMsgs) ->
   error_logger:tty(false),
   Parallel = ?opt(parallel, Options),
@@ -85,41 +88,71 @@ start(Options, LogMsgs) ->
 
 start_parallel(RawOptions, OldOptions) ->
   Nodes = concuerror_nodes:start(RawOptions),
-  [Node1,Node2] = Nodes,
   % The the process_spawner starts and stops will be fixed when I make the
   % process_spawner a gen_server
   SpawnerOptions = [{nodes, Nodes}|OldOptions],
-  {Controller, ControllerRef} = spawn_monitor(fun() -> controller_initialize() end),
   ProcessSpawner = concuerror_process_spawner:start(SpawnerOptions),
-  StartAux =
+  Controller = concuerror_controller:start(Nodes),
+  AdditionalOptionts = [{nodes, Nodes},
+                        {process_spawner, ProcessSpawner},
+                        {controller, Controller}],
+  StartFun =
     fun() ->
 	Status =
 	  case concuerror_options:finalize(RawOptions) of
 	    {ok, Options, LogMsgs} ->
-              ParallelOptions = [ {nodes, Nodes}
-                                , {controller, Controller}
-                                , {process_spawner, ProcessSpawner} 
-                                  | Options],
+              ParallelOptions = AdditionalOptionts ++ Options,
               start(ParallelOptions, LogMsgs);
 	    {exit, ExitStatus} -> ExitStatus
 	  end,
 	  exit(Status)
     end,
-  Pid1 = spawn(Node1, StartAux),
-  Ref1 = monitor(process, Pid1),
-  Pid2 = spawn(Node2, StartAux),
-  Ref2 = monitor(process, Pid2),
-  ExitStatus = 
-    receive
-      {'DOWN', Ref1, process, Pid1, ExitStatus1} ->
-        ExitStatus1;
-      {'DOWN', Ref2, process, Pid2, ExitStatus2} -> 
-        ExitStatus2
-    end,
+  SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
+  ExitStatus = get_exit_status(SchedulerWrappers, ok),
+  %% ExitStatus = 
+  %%   receive
+  %%     {'DOWN', Ref1, process, Pid1, ExitStatus1} ->
+  %%       ExitStatus1;
+  %%     {'DOWN', Ref2, process, Pid2, ExitStatus2} -> 
+  %%       ExitStatus2
+  %%   end,
+  %% _EX = 
+  %%   receive
+  %%     {'DOWN', Ref1, process, Pid1, ES1} ->
+  %%       ES1;
+  %%     {'DOWN', Ref2, process, Pid2, ES2} -> 
+  %%       ES2
+  %%   end,
+  %% ok = concuerror_controller:stop(Controller),
+  concuerror_process_spawner:stop(ProcessSpawner),
   ok = concuerror_nodes:clear(Nodes),
-  concuerror_process_spawner:stop([{process_spawner, ProcessSpawner}]),
   ExitStatus.
 
+spawn_scheduler_wrappers([], _) ->
+  [];
+spawn_scheduler_wrappers([Node|Rest], StartFun) ->
+  Pid = spawn(Node, StartFun),
+  Ref = monitor(process, Pid),
+  [{Pid, Ref} | spawn_scheduler_wrappers(Rest, StartFun)].
+
+get_exit_status([], Status) ->
+  Status;
+get_exit_status(SchedulerWrappers, Status) ->
+  receive
+    {'DOWN', Ref, process, Pid, ExitStatus} ->
+      true = lists:member({Pid, Ref}, SchedulerWrappers),
+      Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
+      NewStatus =
+        case Status =:= ok of
+          true ->
+            ExitStatus;
+          false ->
+            Status
+            %% TODO figure out what should happen when e.g. Status = exit and ExitStatus = fail
+        end,
+      get_exit_status(Rest, NewStatus)
+  end.
+      
 %%------------------------------------------------------------------------------
 
 -spec maybe_cover_compile() -> 'ok'.

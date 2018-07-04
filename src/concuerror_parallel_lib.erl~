@@ -1,0 +1,228 @@
+-module(concuerror_parallel_lib).
+
+-import("concuerror.hrl").
+
+-export([make_state_transferable/1]).
+
+%%------------------------------------------------------------------------------
+%% Playable state -> Tranferable State
+%%------------------------------------------------------------------------------
+
+-spec make_state_transferable(concuerror_scheduler:scheduler_state()) ->
+                                 concuerror_scheduler:reduced_scheduler_state().
+
+make_state_transferable(State) ->
+  #scheduler_state = {
+     last_scheduled = LastScheduled,
+     need_to_replay = NeedToReplay,
+     trace = Trace
+    } = State,
+  #reduced_scheduler_state{
+     last_scheduled = pid_to_string(LastScheduled),
+     need_to_replay = NeedToReplay,
+     trace = [make_trace_state_transferable(TraceState) | TraceState <- Trace]
+    }.
+
+make_trace_state_transferable(TraceState) ->
+  #trace_state{ 
+     actors = Actors,
+     clock_map = ClockMap,
+     done = Done,
+     enabled = Enabled,
+     index = Index,
+     unique_id = UniqueId,
+     previous_actor = PreviousActor,
+     scheduling_bound = SchedulingBound,
+     sleep_set = SleepSet,
+     wakeup_tree = WakeupTree
+    } = TraceState,
+  #trace_state_trans{
+     actors = [make_actor_transferable(Actor) | Actor <- Actors],
+     clock_map = ClockMap, %TODO maybe change
+     done = 
+     enabled = [make_actor_transferable(Actor) | Actor <- Enabled],
+     index = Index,
+     unique_id = UniqueId,
+     previous_actor = make_actor_transferable(PreviousActor),
+     scheduling_bound = SchedulingBound,
+     sleep set = [make_event_tranferable(Event) | Event <- SleepSet],
+     wakeup_tree = make_wakeup_tree_transferable(WakeupTree),
+    }.
+
+%% TODO add message_queue_trans pattern
+make_actor_transferable('undefined') -> 'undefined';
+make_actor_transferable('none') -> 'none';
+make_actor_transferable({Pid1, Pid2}) ->
+  {pid_to_list(Pid1), pid_to_list(Pid2)};
+make_actor_transferable(MessageEventQueue) when queue:is_queue(MessageEventQueue) ->
+  TranferableList = 
+    [make_message_event_tranferable(Event) | Event <- queue:to_list(MessageEventQueue)],
+  queue:from_list(NewList);
+make_actor_transferable(Pid) ->
+  pid_to_list(Pid).
+
+make_message_event_tranferable(MessageEvent) -> 
+  #message_event{
+     cause_label = CauseLabel,
+     ignored = Ignored,
+     instant = Instant,
+     killing = Killing,
+     message = Message,
+     receive_info = Recipient_Info,
+     recipient = Recipient,
+     sender = Sender,
+     trapping = Trapping,
+     type = Type
+    } = MessageEvent,
+  #message_event_trans{
+     cause_label = CauseLabel,
+     ignored = Ignored,
+     instant = Instant,
+     killing = Killing,
+     message = make_message_tranferable(Message),
+     receive_info = Recipient_Info,
+     recipient = pid_to_list(Recipient),
+     sender = pid_to_list(Sender),
+     trapping = Trapping,
+     type = Type
+    }.
+
+make_message_tranferable(Message) ->
+  #message{
+     data = Date
+     id = Id
+    } = Message,
+  NewId =
+    case Id of
+      {Pid, PosInt} ->
+        {pid_to_list(Pid), PosInt};
+      'hidden' ->
+        Id
+    end,
+  #message_trans{
+     data = pids_to_strings(Data),
+     id = NewId
+    }.
+
+
+%% This looks in the content of the message for pids
+%% and converts them to string.
+%% TODO: check what else types are needed to be taken
+%% into consideration
+
+pids_to_string(Term) when is_pid(Term) ->
+  pid_to_list(Term);
+pids_to_string([]) -> 
+  [];
+pids_to_string([H|T]) ->
+  [pids_to_string(H)|pids_to_string(T)];
+pids_to_string(Term) when is_tuple(Term) ->
+  list_to_tuple(pids_to_string(tuple_to_list(Term)));
+pids_to_string(Term) ->
+  Term.
+
+make_event_tranferable(Event) ->
+  #event{
+     actor = Actor,
+     event_info = EventInfo,
+     label = Label,
+     location = Location,
+     special = Special
+    } = Event,
+  #event_trans{
+     actor = make_actor_transferable(Actor),
+     event_info = make_event_info_transferable(EventInfo),
+     label = Label,
+     location = Location,
+     special = Special
+    }.
+
+make_event_info_transferable('undefined') -> 'undefined';
+make_event_info_transferable(#message_event{} = MessageEvent) ->
+  make_message_event_tranferable(MessageEvent);
+make_event_info_transferable(#builtin_event{} = BuiltinEvent) ->
+  #builtin_event{
+     actor = Actor,
+     extra = Extra,
+     exiting = Exiting,
+     mfargs = MFArgs, %% TODO check if I need to fix this as well
+     result = Result, %% TODO check if I need to fix this as well
+     status = Status,
+     trapping = Trapping
+    } = BuiltinEvent,
+  #builtin_event_trans{
+     actor = pid_to_list(Actor),
+     extra = Extra,
+     exiting = Exiting,
+     mfargs = MFArgs, %% TODO check if I need to fix this as well
+     result = Result, %% TODO check if I need to fix this as well
+     status = Status,
+     trapping = Trapping
+    };
+make_event_info_transferable(#receive_event{} = ReceiveEvent) ->
+  #receive_event{
+     message = Message,
+     receive_info = ReceiveInfo,
+     recipient = Recipient,
+     timeout = Timeout,
+     trapping = Trapping
+    },
+  #receive_event_trans{
+     message = make_message_tranferable(Message),
+     receive_info = ReceiveInfo,
+     recipient = pid_to_list(Recipient),
+     timeout = Timeout,
+     trapping = Trapping
+    };
+make_event_info_transferable(#exit_event = ExitEvent) ->
+  #exit_event{
+     actor = Actor,
+     last_status = Running,
+     exit_by_signal = ExitBySignal,
+     links = Links,
+     monitors = Monitors, %% TODO figure out what do with monitors and links
+     name = Name,
+     reason = Reason,
+     stacktrace = StackTrace,
+     trapping = Trapping
+    } = ExitEvent,
+  NewActor =
+    case is_pid(Actor) of
+      true ->
+        pid_to_list(Actor);
+      false ->
+        Actor
+    end,
+  #exit_event_trans{
+     actor = NewActor,
+     last_status = Running,
+     exit_by_signal = ExitBySignal,
+     links = [pid_to_list(Link) | Link <- Links],
+     monitors = [{Ref, pid_to_list(Link)} | {Ref, Pid} <- Monitors],
+%% TODO figure out what do with monitors and links
+     name = Name,
+     reason = Reason,
+     stacktrace = StackTrace, %% maybe need to check this as well
+     trapping = Trapping
+    }.
+
+make_wakeup_tree_transferable([]) -> [];
+make_wakeup_tree_transferable([Head|Rest]) ->
+  #backtrack_entry{
+     conservative = Conservative,
+     event = Event,
+     origin = Origin,
+     wakeup_tree = WUT
+    } = Head,
+  NewHead =
+    #backtrack_entry_trans{
+       conservative = Conservative,
+       event = make_event_tranferable(Event),
+       origin = Origin,
+       wakeup_tree = make_wakeup_tree_transferable(WUT)
+      },
+  [NewHead|make_wakeup_tree_transferable(Rest)].
+
+%%------------------------------------------------------------------------------
+%% Tranferable state -> Playable State
+%%------------------------------------------------------------------------------

@@ -287,11 +287,14 @@ built_in(erlang, system_info, 1, [A], _Location, Info)
   {doit, Info};
 %% XXX: Check if its redundant (e.g. link to already linked)
 built_in(Module, Name, Arity, Args, Location, InfoIn) ->
+%  io:fwrite("~n!!!!1 ~n~s~nbuilt_in ~w~w~w~n~n",[node(), Module, Name, Args]), % TODO remove
   Info = process_loop(InfoIn),
+%  io:fwrite("~n!!!!!2 ~n~s~nbuilt_in ~w~w~w~n~n",[node(), Module, Name, Arity]), % TODO remove
   ?debug_flag(?short_builtin, {'built-in', Module, Name, Arity, Location}),
   #concuerror_info{flags = #process_flags{trap_exit = Trapping}} = LocatedInfo =
     add_location_info(Location, Info#concuerror_info{extra = undefined}),%ResetInfo),
   try
+%    io:fwrite("~n!!!!!3 ~n~s~nbuilt_in ~w~w~w~n~n",[node(), Module, Name, Arity]), % TODO remove
     {Value, UpdatedInfo} = run_built_in(Module, Name, Arity, Args, LocatedInfo),
     #concuerror_info{extra = Extra, event = MaybeMessageEvent} = UpdatedInfo,
     Event = maybe_deliver_message(MaybeMessageEvent, UpdatedInfo),
@@ -311,11 +314,15 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
     {{didit, Value}, NewInfo#concuerror_info{stacktop = []}}
   catch
     throw:Reason ->
+%      io:fwrite("~n!!!!!4 ~n~s~nbuilt_in ~w~w~w~n~n",[node(), Module, Name, Arity]), % TODO remove
+%      exit({throw, Reason}), % TODO remove
       #concuerror_info{scheduler = Scheduler} = Info,
       ?debug_flag(?loop, crashing),
       exit(Scheduler, {Reason, Module, Name, Arity, Args, Location}),
       receive after infinity -> ok end;
     error:Reason ->
+%      io:fwrite("~n!!!!!5 ~n~s~nbuilt_in ~w~w~w~n~n",[node(), Module, Name, Arity]), % TODO remove
+%      exit(erlang:get_stacktrace()), % TODO remove
       #concuerror_info{event = FEvent} = LocatedInfo,
       FEventInfo =
         #builtin_event{
@@ -770,6 +777,7 @@ run_built_in(erlang, spawn, 3, [M, F, Args], Info) ->
 run_built_in(erlang, spawn_link, 3, [M, F, Args], Info) ->
   run_built_in(erlang, spawn_opt, 1, [{M, F, Args, [link]}], Info);
 run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
+%%  io:fwrite("Spawn_opt~w~n",[{Module, Name, Args, SpawnOpts}]), %% TODO remove
   #concuerror_info{
      event = Event,
      processes = Processes,
@@ -786,6 +794,8 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
   {Result, FinalInfo} =
     case EventInfo of
       %% Replaying...
+      %% TODO : fix replaying by either always putting an event as undefined when replaying on a different scheduler
+      %%                         or transfering Process tables and enabling new processes 
       #builtin_event{result = OldResult} ->
         case HasMonitor of
           false -> ok;
@@ -1452,6 +1462,7 @@ process_loop(Info) ->
   ?debug_flag(?loop, process_loop),
   receive
     #event{event_info = EventInfo} = Event ->
+%      io:fwrite("Event: ~n~p~n", [Event]),  % TODO remove
       ?debug_flag(?loop, got_event),
       Status = Info#concuerror_info.status,
       case Status =:= exited of
@@ -1465,6 +1476,7 @@ process_loop(Info) ->
               ?debug_flag(?loop, exploring),
               NewInfo;
             _OtherReplay ->
+ %             io:fwrite("Info: ~n~p~n", [NewInfo]),% TODO remove
               ?debug_flag(?loop, replaying),
               NewInfo
           end
@@ -1803,11 +1815,16 @@ system_processes_wrappers(Info) ->
   ok.
 
 wrap_system(Name, Info) ->
-  #concuerror_info{processes = Processes} = Info,
+  #concuerror_info{
+     processes = Processes,
+     process_spawner = ProcessSpawner
+    } = Info,
   Wrapped = whereis(Name),
   {_, Leader} = process_info(Wrapped, group_leader),
   Fun = fun() -> system_wrapper_loop(Name, Wrapped, Info) end,
-  Pid = spawn_link(Fun),
+  MFArgs = {erlang, apply, [Fun, []]},
+  Symbol = atom_to_list(Name),
+  Pid = concuerror_process_spawner:spawn_link(ProcessSpawner, MFArgs, Symbol),
   ets:insert(Processes, ?new_system_process(Pid, Name, wrapper)),
   true = ets:update_element(Processes, Pid, {?process_leader, Leader}),
   ok.

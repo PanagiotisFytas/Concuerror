@@ -46,6 +46,9 @@
                unique_id/0
              ]).
 
+%% Controller Interface
+-export([distribute_interleavings/2]).
+
 %% =============================================================================
 %% DATA STRUCTURES & TYPES
 %% =============================================================================
@@ -147,53 +150,60 @@
           use_sleep_sets               :: boolean(),
           use_unsound_bpor             :: boolean(),
           controller                   :: pid() | undefined,
-          parallel                     :: boolean()
+          parallel                     :: boolean(),
+          granularity = undefined      :: undefined | coarse | grained,
+          replay_mode = undefined      :: undefined | pseudo | actual 
+          %% TODO check if replay_mode and granularity are needed 
          }).
 %-------------------------------------------------------------------------------
 -ifdef(BEFORE_OTP_17).
--type clock_map_trans()           :: [{actor_trans(), vector_clock()}].
--type message_event_queue_trans() :: queue().
+-type vector_clock_transferable()        :: [{actor_transferable(), index()}].
+-type clock_map_transferable()           :: [{actor_transferable(), vector_clock_transferable()}].
+-type message_event_queue_transferable() :: queue().
 -else.
-%-type vector_clock_trans()        :: #{actor_trans() => index()}.
--type clock_map_trans()           :: [{actor_trans(), vector_clock()}].
--type message_event_queue_trans() :: queue:queue(#message_event_trans{}).
+-type vector_clock_transferable()        :: [{actor_transferable(), index()}].
+-type clock_map_transferable()           :: [{actor_transferable(), vector_clock_transferable()}].
+-type message_event_queue_transferable() :: queue:queue(#message_event_transferable{}).
 -endif.
 
 
 
--record(backtrack_entry_trans, {
+-record(backtrack_entry_transferable, {
           conservative = false :: boolean(),
-          event                :: event_trans(),
+          event                :: event_transferable(),
           origin = 1           :: interleaving_id(),
-          wakeup_tree = []     :: event_tree_trans()
+          wakeup_tree = []     :: event_tree_transferable()
          }).
 
--type event_tree_trans() :: [#backtrack_entry_trans{}].
+-type event_tree_transferable() :: [#backtrack_entry_transferable{}].
 
--type channel_actor_trans() :: {channel_trans(), message_event_queue_trans()}.
+-type channel_actor_transferable() :: {channel_transferable(),
+                                       message_event_queue_transferable()}.
 
--record(trace_state_trans, {
-          actors                        :: [string() | channel_actor_trans() ],
-          clock_map        = []         :: clock_map_trans(),
-          done             = []         :: [event_trans()],
-          enabled          = []         :: [string() | channel_actor_trans()],
+-record(trace_state_transferable, {
+          actors                        :: [string() | channel_actor_transferable() ],
+          clock_map        = []         :: clock_map_transferable(),
+          done             = []         :: [event_transferable()],
+          enabled          = []         :: [string() | channel_actor_transferable()],
           index                         :: index(),
           unique_id                     :: unique_id(),
-          previous_actor   = 'none'     :: 'none' | actor_trans(),
+          previous_actor   = 'none'     :: 'none' | actor_transferable(),
           scheduling_bound              :: concuerror_options:bound(),
-          sleep_set        = []         :: [event_trans()],
-          wakeup_tree      = []         :: event_tree_trans()
+          sleep_set        = []         :: [event_transferable()],
+          wakeup_tree      = []         :: event_tree_transferable()
          }).
 
-%% -type trace_state_trans() :: #trace_state_trans{}.
+%% -type trace_state_transferable() :: #trace_state_transferable{}.
 
 -record(reduced_scheduler_state, {
+          interleaving_id              :: interleaving_id(),
           last_scheduled               :: pid(),
           need_to_replay               :: boolean(),
+          origin                       :: interleaving_id(),
           trace                        :: [trace_state()]
          }).
 
-%% -type reduced_scheduler_state() :: #reduced_scheduler_state{}.
+-type reduced_scheduler_state() :: #reduced_scheduler_state{}.
 %% TODO: add what was previous called exploring and warnings 
 
 
@@ -276,16 +286,18 @@ run(Options) ->
   end,
   concuerror_logger:plan(Logger),
   ?time(Logger, "Exploration start"),
-  Ret = 
-    case Parallel of
-      false ->
-        explore_scheduling(InitialState);
-      true ->
-        Controller ! {scheduler, self()},
-        loop(InitialState)
-    end,
-  concuerror_callback:cleanup_processes(Processes),
-  Ret.
+  case Parallel of
+    false ->
+      Ret = explore_scheduling(InitialState),
+      concuerror_callback:cleanup_processes(Processes),
+      Ret;
+    true ->
+      Controller ! {scheduler, self()},
+      Ret = loop(InitialState),
+      concuerror_callback:cleanup_processes(Processes),
+      Controller ! finished,
+      Ret
+  end.
 
 %%------------------------------------------------------------------------------
 
@@ -307,15 +319,14 @@ explore_scheduling_parallel(State) ->
   Controller = NewState#scheduler_state.controller,
   case HasMore of
     true ->
-      concuerror_callback:reset_processes(State#scheduler_state.processes),
+%      concuerror_callback:reset_processes(State#scheduler_state.processes),
       Controller ! {has_more, self(), make_state_transferable(NewState)};
     false ->
-      concuerror_callback:reset_processes(State#scheduler_state.processes),
+%      concuerror_callback:reset_processes(State#scheduler_state.processes),
       Controller ! {done, self()}
   end,
   NewState.
   
-
 loop(State) ->
   receive
     start ->
@@ -323,11 +334,28 @@ loop(State) ->
       loop(NewState);
     {explore, TransferableState} ->
       ReceivedState = revert_state(State, TransferableState),
-      NewState = explore_scheduling_parallel(ReceivedState),
+      FixedState =
+        ReceivedState#scheduler_state{
+          granularity = fine,
+          replay_mode = actual
+         },
+      NewState = explore_scheduling_parallel(FixedState),
       loop(NewState);
+    {explore, non_stop, TransferableState} ->
+      ReceivedState = revert_state(State, TransferableState),
+      FixedState =
+        ReceivedState#scheduler_state{
+          granularity = coarse,
+          replay_mode = actual
+         },
+      explore_scheduling(FixedState), %% TODO fix this
+      #scheduler_state{controller = Controller} = State,
+      Controller ! {done, self()},
+      loop(State);
     finish ->
       ok
   end.
+
 %%------------------------------------------------------------------------------
 
 % TODO remove these debugging function
@@ -369,6 +397,7 @@ explore(State) ->
       FatalCrashState =
         add_error(fatal, discard_last_trace_state(UpdatedState)),
       catch log_trace(FatalCrashState),
+      % exit({Class, Reason, Stack}), % TODO remove
       erlang:raise(Class, Reason, Stack)
   end.
 
@@ -527,6 +556,7 @@ get_next_event(Event, MaybeNeedsReplayState) ->
   #trace_state{actors = Actors, sleep_set = SleepSet} = Last,
   SortedActors = schedule_sort(Actors, State),
   #event{actor = Actor, label = Label} = Event,
+  #trace_state{index = I} = Last,
   case Actor =:= undefined of
     true ->
       AvailableActors = filter_sleep_set(SleepSet, SortedActors),
@@ -547,7 +577,6 @@ get_next_event(Event, MaybeNeedsReplayState) ->
                     {ok, E} -> E;
                     _ -> NewEvent
                   end,
-                exit({'event!!!!', Event, 'newEvent!!!!', NewEvent}),
                 Reason = {replay_mismatch, I, Event, New, PrintDepth},
                 ?crash(Reason)
             end;
@@ -1772,45 +1801,39 @@ replay_prefix(Trace, State) ->
 
 replay_prefix_aux([_], State) ->
   %% Last state has to be properly replayed.
-  State;
+  case State#scheduler_state.granularity of
+    coarse ->
+      State#scheduler_state{replay_mode = pseudo};
+    _ ->
+      State
+  end;
 replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
-  %% case element(1, Event#event.event_info) =:= message_event of 
-  %%   true ->
-  %%     exit(Event);
-  %%   _ -> 
-  %%     io:fwrite("!!!!!!!!!!!!!!!!!!!!!!!!~p~n", [Event])
-  %% end,
-  #scheduler_state{logger = _Logger, print_depth = PrintDepth} = State,
+  #scheduler_state{
+     logger = _Logger,
+     print_depth = PrintDepth,
+     parallel = Parallel,
+     replay_mode = ReplayMode
+    } = State,
   ?debug(_Logger, "~s~n", [?pretty_s(I, Event)]),
-  {ok, #event{actor = Actor} = NewEvent} = get_next_event_backend(Event, State),
-  %% case element(1, Event#event.event_info) =:= message_event of 
-  %%   true ->
-  %%     exit(Event);
-  %%   _ -> 
-  %%     io:fwrite("!!!!!!!!!!!!!!!!!!!!!!!!~p~n????????????????~p~n", [Event, NewEvent])
-  %% end,
+  {ok, #event{actor = Actor} = NewEvent} = 
+    case Parallel andalso ReplayMode =:= actual of 
+      false ->
+        get_next_event_backend(Event, State);
+      true ->
+        get_next_event_backend(Event#event{event_info = undefined},State)
+    end,
   try
     true = Event =:= NewEvent
   catch
-    _:_ ->
-      #event{event_info = EventInfo} = Event,
-      #event{event_info = NewEventInfo} = NewEvent,
-      case Event#event{event_info = undefined} =:= NewEvent#event{event_info = undefined} 
-        andalso is_tuple(EventInfo) andalso element(1, EventInfo) =:= builtin_event
-        andalso is_tuple(NewEventInfo) andalso element(1, NewEventInfo) =:= builtin_event 
-        andalso 
-        EventInfo#builtin_event{mfargs = undefined} =:= NewEventInfo#builtin_event{mfargs = undefined} 
+    _C:_R ->
+      case logically_equal(State, Event, NewEvent)
       of
         true ->
-          %% #builtin_event{mfargs = MFArgs} = EventInfo,
-          %% #builtin_event{mfargs = NewMFArgs} = NewEventInfo,
-          %% case EventInfo#builtin_event{mfargs = undefined} =:= NewEventInfo#builtin_event{mfargs = undefined} of
-          %%   and also 
-      %% {erlang, spawn, [erlang, apply, [Fun, []]]} = MFArgs,
-      %% {erlang, spawn, [erlang, apply, [NewFun, []]]} = NewMFArgs,
-      %% exit({erlang:fun_to_list(Fun), Fun, erlang:fun_to_list(NewFun), NewFun, erlang:fun_to_list(Fun) =:= erlang:fun_to_list(NewFun), Fun == NewFun}),
           ok;
-        false -> 
+        %% {erlang,spawn,[erlang,apply,[Fun,[]]]} = EventInfo#builtin_event.mfargs,
+        %% {erlang,spawn,[erlang,apply,[NewFun,[]]]} = NewEventInfo#builtin_event.mfargs,
+        %% exit(erlang:fun_info(Fun), erlang:fun_info(NewFun));
+        false ->
           #scheduler_state{print_depth = PrintDepth} = State,
           ?crash({replay_mismatch, I, Event, NewEvent, PrintDepth})
       end
@@ -1822,6 +1845,39 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
     end,
   NewState = State#scheduler_state{last_scheduled = NewLastScheduled},
   replay_prefix_aux(Rest, maybe_log(Event, NewState, I)).
+
+logically_equal(#scheduler_state{parallel = Parallel}, _, _)
+  when not Parallel ->
+  false;
+logically_equal(_,
+                #event{event_info = EventInfo} = Event,
+                #event{event_info = NewEventInfo} = NewEvent) ->
+  Event#event{event_info = undefined} =:= NewEvent#event{event_info = undefined}
+    andalso is_tuple(EventInfo)
+    andalso element(1, EventInfo) =:= builtin_event
+    andalso is_tuple(NewEventInfo)
+    andalso element(1, NewEventInfo) =:= builtin_event
+    andalso EventInfo#builtin_event{mfargs = undefined}
+    =:= NewEventInfo#builtin_event{mfargs = undefined}
+    andalso logically_equal_mfargs(EventInfo#builtin_event.mfargs,
+                                   NewEventInfo#builtin_event.mfargs).
+
+logically_equal_mfargs([], []) ->
+  true;
+logically_equal_mfargs([H|T], [NewH|NewT]) ->
+  logically_equal_mfargs(H, NewH)
+    andalso logically_equal_mfargs(T, NewT);
+logically_equal_mfargs(Term, NewTerm)
+  when is_tuple(Term) andalso is_tuple(NewTerm) ->
+  logically_equal_mfargs(tuple_to_list(Term), tuple_to_list(NewTerm));
+logically_equal_mfargs(Fun, NewFun)
+ %% TODO : maybe add more items here
+  when is_function(Fun) andalso is_function(NewFun) ->
+  erlang:fun_info(Fun, name) =:= erlang:fun_info(NewFun, name)
+    andalso erlang:fun_info(Fun, module) =:= erlang:fun_info(NewFun, module)
+    andalso erlang:fun_info(Fun, arity) =:= erlang:fun_info(NewFun, arity);
+logically_equal_mfargs(Term, NewTerm) ->
+  Term =:= NewTerm.
 
 %% =============================================================================
 %% INTERNAL INTERFACES
@@ -1978,18 +2034,40 @@ bound_reached(Logger) ->
 %% Needed for parallel mode
 %% =============================================================================
 %%------------------------------------------------------------------------------
+%% Controller Interface
+%%------------------------------------------------------------------------------
+
+-spec distribute_interleavings(reduced_scheduler_state(), non_neg_integer()) ->
+                                  [reduced_scheduler_state()].
+
+distribute_interleavings(TransferableState, AvailableSchedulers) -> 
+  #reduced_scheduler_state{trace = Trace} = TransferableState,
+  Traces = distribute_interleavings_aux(Trace, AvailableSchedulers, []),
+  [TransferableState#reduced_scheduler_state{trace = T} || T <- Traces].
+
+distribute_interleavings_aux(_, 0, Traces) ->
+  Traces;
+distribute_interleavings_aux(Trace, N, Traces) ->
+  distribute_interleavings_aux(Trace, N-1, [Trace|Traces]).
+
+
+%%------------------------------------------------------------------------------
 %% Playable state -> Tranferable State
 %%------------------------------------------------------------------------------
 
 make_state_transferable(State) ->
   #scheduler_state{
+     interleaving_id = InterleavingId,
      last_scheduled = LastScheduled,
      need_to_replay = NeedToReplay,
+     origin = Origin,
      trace = Trace
     } = State,
   #reduced_scheduler_state{
+     interleaving_id = InterleavingId,
      last_scheduled = pid_to_list(LastScheduled),
      need_to_replay = NeedToReplay,
+     origin = Origin,
      trace = [make_trace_state_transferable(TraceState) || TraceState <- Trace]
     }.
 
@@ -2006,9 +2084,12 @@ make_trace_state_transferable(TraceState) ->
      sleep_set = SleepSet,
      wakeup_tree = WakeupTree
     } = TraceState,
-  #trace_state_trans{
+%  exit({ClockMap,?to_list(ClockMap)}),
+  ClockMapList = [{make_key_transferable(Key), make_value_transferable(Value)}
+                  || {Key, Value} <- ?to_list(ClockMap)],
+  #trace_state_transferable{
      actors = [make_actor_transferable(Actor) || Actor <- Actors],
-     clock_map = ClockMap, %TODO maybe change
+     clock_map = ClockMapList, %TODO maybe change
      done = [make_event_tranferable(Event) || Event <- Done],
      enabled = [make_actor_transferable(Actor) || Actor <- Enabled],
      index = Index,
@@ -2019,7 +2100,7 @@ make_trace_state_transferable(TraceState) ->
      wakeup_tree = make_wakeup_tree_transferable(WakeupTree)
     }.
 
-%% TODO add message_queue_trans pattern
+%% TODO add message_queue_transferable pattern
 make_actor_transferable('undefined') -> 'undefined';
 make_actor_transferable('none') -> 'none';
 make_actor_transferable({Pid1, Pid2}) ->
@@ -2030,6 +2111,15 @@ make_actor_transferable(MessageEventQueue) ->
   TransferableList = 
     [make_message_event_tranferable(Event) || Event <- queue:to_list(MessageEventQueue)],
   queue:from_list(TransferableList).
+
+make_key_transferable('state') -> 'state';
+make_key_transferable({Id, sent}) -> {make_id_transferable(Id), sent};
+make_key_transferable(Actor) -> make_actor_transferable(Actor). 
+
+%% TODO check if I need to add more patterns here
+make_value_transferable('independent') -> 'independent';
+make_value_transferable(VectorClock) ->
+    [{make_actor_transferable(Actor), Index} || {Actor, Index} <- ?to_list(VectorClock)].
 
 make_message_event_tranferable(MessageEvent) -> 
   #message_event{
@@ -2044,7 +2134,7 @@ make_message_event_tranferable(MessageEvent) ->
      trapping = Trapping,
      type = Type
     } = MessageEvent,
-  #message_event_trans{
+  #message_event_transferable{
      cause_label = CauseLabel,
      ignored = Ignored,
      instant = Instant,
@@ -2064,19 +2154,14 @@ make_message_tranferable(Message) ->
      data = Data,
      id = Id
     } = Message,
-  NewId =
-    case Id of
-      {Pid, PosInt} when is_pid(Pid) ->
-        %% this pid could be 'user'
-        %% TODO check if this is a bug
-        {pid_to_list(Pid), PosInt};
-      Other ->
-        Other
-    end,
-  #message_trans{
+  #message_transferable{
      data = make_term_transferable(Data),
-     id = NewId
+     id = make_id_transferable(Id)
     }.
+
+make_id_transferable({Pid, PosInt}) when is_pid(Pid) ->
+  {pid_to_list(Pid), PosInt};
+make_id_transferable(Other) -> Other.
 
 
 %% This looks in the content of the message for pids
@@ -2109,7 +2194,7 @@ make_event_tranferable(Event) ->
      location = Location,
      special = Special
     } = Event,
-  #event_trans{
+  #event_transferable{
      actor = make_actor_transferable(Actor),
      event_info = make_event_info_transferable(EventInfo),
      label = Label,
@@ -2132,7 +2217,7 @@ make_event_info_transferable(#builtin_event{} = BuiltinEvent) ->
     } = BuiltinEvent,
   {Module, Fun, Args} = MFArgs,
   TranferableArgs = [make_term_transferable(Arg) || Arg <- Args],
-  Trans = #builtin_event_trans{
+  Transferable = #builtin_event_transferable{
      actor = pid_to_list(Actor),
      extra = Extra,
      exiting = Exiting,
@@ -2144,11 +2229,11 @@ make_event_info_transferable(#builtin_event{} = BuiltinEvent) ->
   %% {_A,_B,_C} = MFArgs,
   %% case _B == 'spawn' of
   %%   true -> 
-  %%     exit(BuiltinEvent,Trans);
+  %%     exit(BuiltinEvent,Transferable);
   %%   false ->
   %%     ok
   %% end,
-  Trans;
+  Transferable;
 make_event_info_transferable(#receive_event{} = ReceiveEvent) ->
   #receive_event{
      message = Message,
@@ -2157,7 +2242,7 @@ make_event_info_transferable(#receive_event{} = ReceiveEvent) ->
      timeout = Timeout,
      trapping = Trapping
     } = ReceiveEvent,
-  #receive_event_trans{
+  #receive_event_transferable{
      message = make_message_tranferable(Message),
      receive_info = ReceiveInfo,
      recipient = pid_to_list(Recipient),
@@ -2183,7 +2268,7 @@ make_event_info_transferable(#exit_event{} = ExitEvent) ->
       false ->
         Actor
     end,
-  #exit_event_trans{
+  #exit_event_transferable{
      actor = NewActor,
      last_status = Running,
      exit_by_signal = ExitBySignal,
@@ -2191,7 +2276,7 @@ make_event_info_transferable(#exit_event{} = ExitEvent) ->
      monitors = [{Ref, pid_to_list(Pid)} || {Ref, Pid} <- Monitors],
 %% TODO figure out what do with monitors and links
      name = Name,
-     reason = Reason,
+     reason = Reason, %% TODO maybe (probably) need to fix this as well
      stacktrace = StackTrace, %% maybe need to check this as well
      trapping = Trapping
     }.
@@ -2205,7 +2290,7 @@ make_wakeup_tree_transferable([Head|Rest]) ->
      wakeup_tree = WUT
     } = Head,
   NewHead =
-    #backtrack_entry_trans{
+    #backtrack_entry_transferable{
        conservative = Conservative,
        event = make_event_tranferable(Event),
        origin = Origin,
@@ -2219,20 +2304,24 @@ make_wakeup_tree_transferable([Head|Rest]) ->
 
 revert_state(PreviousState, ReducedState) ->
   #reduced_scheduler_state{
+     interleaving_id = InterleavingId,
      last_scheduled = LastScheduled,
      need_to_replay = NeedToReplay,
+     origin = Origin,
      trace = Trace
     } = ReducedState,
   PreviousState#scheduler_state{
-     last_scheduled = list_to_pid(LastScheduled),
-     need_to_replay = NeedToReplay,
-     trace = [revert_trace_state(TraceState) || TraceState <- Trace]
-    }.
+    interleaving_id = InterleavingId,
+    last_scheduled = list_to_pid(LastScheduled),
+    need_to_replay = NeedToReplay,
+    origin = Origin,
+    trace = [revert_trace_state(TraceState) || TraceState <- Trace]
+   }.
 
 revert_trace_state(TraceState) ->
-  #trace_state_trans{ 
+  #trace_state_transferable{ 
      actors = Actors,
-     clock_map = ClockMap,
+     clock_map = ClockMapList,
      done = Done,
      enabled = Enabled,
      index = Index,
@@ -2242,6 +2331,8 @@ revert_trace_state(TraceState) ->
      sleep_set = SleepSet,
      wakeup_tree = WakeupTree
     } = TraceState,
+  ClockMap = ?from_list([{revert_key(Key), revert_value(Value)}
+                         || {Key, Value} <- ClockMapList]),
   #trace_state{
      actors = [revert_actor(Actor) || Actor <- Actors],
      clock_map = ClockMap, %TODO maybe change
@@ -2255,7 +2346,7 @@ revert_trace_state(TraceState) ->
      wakeup_tree = revert_wakeup_tree(WakeupTree)
     }.
 
-%% TODO add message_queue_trans pattern
+%% TODO add message_queue_transferable pattern
 revert_actor('undefined') -> 'undefined';
 revert_actor('none') -> 'none';
 revert_actor({PidList1, PidList2}) ->
@@ -2267,8 +2358,17 @@ revert_actor(MessageEventQueue) ->
     [make_message_event_tranferable(Event) || Event <- queue:to_list(MessageEventQueue)],
   queue:from_list(RevertedList).
 
+
+revert_key('state') -> 'state';
+revert_key({Id, sent}) -> {revert_id(Id), sent};
+revert_key(Actor) -> revert_actor(Actor).
+
+revert_value('independent') -> 'independent';
+revert_value(VectorClockList) ->
+  ?from_list([{revert_actor(Actor), Index} || {Actor, Index} <- VectorClockList]).
+
 revert_message_event(MessageEvent) -> 
-  #message_event_trans{
+  #message_event_transferable{
      cause_label = CauseLabel,
      ignored = Ignored,
      instant = Instant,
@@ -2296,22 +2396,19 @@ revert_message_event(MessageEvent) ->
 revert_message('after') ->
   'after';
 revert_message(Message) ->
-  #message_trans{
+  #message_transferable{
      data = Data,
      id = Id
     } = Message,
-  NewId =
-    case Id of
-      {PidList, PosInt} when not is_atom(PidList) ->
-        %% TODO check this!!! what happens when Pid is 'user' (e.g)
-        {list_to_pid(PidList), PosInt};
-      Other ->
-        Other
-    end,
   #message{
      data = revert_term(Data),
-     id = NewId
+     id = revert_id(Id)
     }.
+
+%% TODO check this!!! what happens when Pid is 'user' (e.g)
+revert_id({PidList, PosInt}) when not is_atom(PidList) ->
+  {list_to_pid(PidList), PosInt};
+revert_id(Other) -> Other.
 
 
 %% This looks in the content of the message for pids
@@ -2331,7 +2428,7 @@ revert_term(Term) ->
   Term.
 
 revert_event(Event) ->
-  #event_trans{
+  #event_transferable{
      actor = Actor,
      event_info = EventInfo,
      label = Label,
@@ -2347,10 +2444,10 @@ revert_event(Event) ->
     }.
 
 revert_event_info('undefined') -> 'undefined';
-revert_event_info(#message_event_trans{} = MessageEvent) ->
+revert_event_info(#message_event_transferable{} = MessageEvent) ->
   revert_message_event(MessageEvent);
-revert_event_info(#builtin_event_trans{} = BuiltinEvent) ->
-  #builtin_event_trans{
+revert_event_info(#builtin_event_transferable{} = BuiltinEvent) ->
+  #builtin_event_transferable{
      actor = Actor,
      extra = Extra,
      exiting = Exiting,
@@ -2370,8 +2467,8 @@ revert_event_info(#builtin_event_trans{} = BuiltinEvent) ->
      status = Status,
      trapping = Trapping
     };
-revert_event_info(#receive_event_trans{} = ReceiveEvent) ->
-  #receive_event_trans{
+revert_event_info(#receive_event_transferable{} = ReceiveEvent) ->
+  #receive_event_transferable{
      message = Message,
      receive_info = ReceiveInfo,
      recipient = Recipient,
@@ -2385,8 +2482,8 @@ revert_event_info(#receive_event_trans{} = ReceiveEvent) ->
      timeout = Timeout,
      trapping = Trapping
     };
-revert_event_info(#exit_event_trans{} = ExitEvent) ->
-  #exit_event_trans{
+revert_event_info(#exit_event_transferable{} = ExitEvent) ->
+  #exit_event_transferable{
      actor = Actor,
      last_status = Running,
      exit_by_signal = ExitBySignal,
@@ -2419,7 +2516,7 @@ revert_event_info(#exit_event_trans{} = ExitEvent) ->
 
 revert_wakeup_tree([]) -> [];
 revert_wakeup_tree([Head|Rest]) ->
-  #backtrack_entry_trans{
+  #backtrack_entry_transferable{
      conservative = Conservative,
      event = Event,
      origin = Origin,

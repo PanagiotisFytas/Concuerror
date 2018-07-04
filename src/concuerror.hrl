@@ -178,8 +178,20 @@
 %% for parallel mode
 -define(epmd_tries, 10).
 -define(epmd_not_running_response, "epmd: Cannot connect to local epmd\n").
--define(max_pid_list(PidList1, PidList2),
-        pid_to_list(max(list_to_pid(PidList1), list_to_pid(PidList2)))).
+-define(max_pid_list(PidLists),
+        pid_to_list(
+          lists:max(
+            [list_to_pid(PidList) || PidList <- PidLists]
+           ))).
+-define(number_of_schedulers, 2).
+
+-ifdef(BEFORE_OTP_17).
+-define(to_list(Dict), dict:to_list(Dict)).
+-define(from_list(Dict), dict:from_list(Dict)).
+-else.
+-define(to_list(Map), maps:to_list(Map)).
+-define(from_list(Map), maps:from_list(Map)).
+-endif.
 %%------------------------------------------------------------------------------
 -type links() :: ets:tid().
 
@@ -289,16 +301,16 @@
 %% definitions for transefarables records between nodes, basically the same thing byt
 %% let pids be strings so it can be transfered as a whole 
 
--type message_id_trans() :: {pid(), pos_integer()} | 'hidden' | {string(), pos_integer()}.
+-type message_id_transferable() :: {pid(), pos_integer()} | 'hidden' | {string(), pos_integer()}.
 
--record(message_trans, {
+-record(message_transferable, {
           data    :: term(),
-          id      :: message_id_trans()
+          id      :: message_id_transferable()
          }).
 
--type message_trans() :: #message_trans{}.
+-type message_transferable() :: #message_transferable{}.
 
--record(builtin_event_trans, {
+-record(builtin_event_transferable, {
           actor = self()   :: pid() | string(),
           extra            :: term(),
           exiting = false  :: boolean(),
@@ -308,14 +320,14 @@
           trapping = false :: boolean()
          }).
 
--type builtin_event_trans() :: #builtin_event_trans{}.
+-type builtin_event_transferable() :: #builtin_event_transferable{}.
 
--record(message_event_trans, {
+-record(message_event_transferable, {
           cause_label      :: label(),
           ignored = false  :: boolean(),
           instant = true   :: boolean(),
           killing = false  :: boolean(),
-          message          :: message_trans(),
+          message          :: message_transferable(),
           receive_info     :: 'undefined' | 'not_received' | receive_info(),
           recipient        :: pid() | string(),
           sender = self()  :: pid() | string(),
@@ -323,20 +335,20 @@
           type = message   :: 'message' | 'exit_signal'
          }).
 
--type message_event_trans() :: #message_event_trans{}.
+-type message_event_transferable() :: #message_event_transferable{}.
 
--record(receive_event_trans, {
+-record(receive_event_transferable, {
           %% clause_location :: location(),
-          message            :: message_trans() | 'after',
+          message            :: message_transferable() | 'after',
           receive_info       :: receive_info(),
           recipient = self() :: pid() | string(),
           timeout = infinity :: timeout(),
           trapping = false   :: boolean()
          }).
 
--type receive_event_trans() :: #receive_event_trans{}.
+-type receive_event_transferable() :: #receive_event_transferable{}.
 
--record(exit_event_trans, {
+-record(exit_event_transferable, {
           actor = self()            :: pid() | reference() | string(),
           last_status = running     :: running | waiting,
           exit_by_signal = false    :: boolean(),
@@ -348,23 +360,23 @@
           trapping = false          :: boolean()
          }).
 
--type exit_event_trans() :: #exit_event_trans{}.
+-type exit_event_transferable() :: #exit_event_transferable{}.
 
--type event_info_trans() ::
-        builtin_event_trans() |
-        exit_event_trans()    |
-        message_event_trans() |
-        receive_event_trans().
+-type event_info_transferable() ::
+        builtin_event_transferable() |
+        exit_event_transferable()    |
+        message_event_transferable() |
+        receive_event_transferable().
 
--type channel_trans() :: {pid(), pid()} | {string(), string()}.
--type actor_trans() :: pid() | channel_trans() | string().
+-type channel_transferable() :: {pid(), pid()} | {string(), string()}.
+-type actor_transferable() :: pid() | channel_transferable() | string().
 
--record(event_trans, {
-          actor         :: 'undefined' | actor_trans(),
-          event_info    :: 'undefined' | event_info_trans(),
+-record(event_transferable, {
+          actor         :: 'undefined' | actor_transferable(),
+          event_info    :: 'undefined' | event_info_transferable(),
           label         :: 'undefined' | label(),
           location = [] :: location(),
           special = []  :: [term()] %% XXX: Specify
          }).
 
--type event_trans() :: #event_trans{}.
+-type event_transferable() :: #event_transferable{}.

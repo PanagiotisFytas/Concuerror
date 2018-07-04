@@ -54,7 +54,7 @@ start(Options) ->
   end.
 
 initialize_spawner(Options) ->
-  MaxProcesses = ?opt(max_processes, Options),
+  MaxProcesses = ?opt(max_processes, Options) + length(registered()),
   Parallel = ?opt(parallel, Options),
   State = #spawner_state{
              max_processes = MaxProcesses,
@@ -64,50 +64,20 @@ initialize_spawner(Options) ->
     false ->
       Fun = fun() -> wait_activation() end,
       AvailableProcesses = [spawn_link(Fun) || _ <- lists:seq(1, MaxProcesses)],
-      State#spawner_state{available_processes = queue:from_list(AvailableProcesses)};
+      State#spawner_state{
+        available_processes = queue:from_list(AvailableProcesses)
+       };
     true ->
       Nodes = ?opt(nodes, Options),
-      [Node1, Node2] = Nodes,
       Master = self(),
-      Spawner1 = erlang:spawn_link(Node1, fun() -> initialize_slave_spawner(Master, MaxProcesses) end),
-      Spawner2 = erlang:spawn_link(Node2, fun() -> initialize_slave_spawner(Master, MaxProcesses) end),
-      receive
-        {Spawner1, FirstPidList1} ->
-          receive
-            {Spawner2, FirstPidList2} ->
-              FirstPidList = ?max_pid_list(FirstPidList1, FirstPidList2),
-              Spawner1 ! {start, FirstPidList},
-              Spawner2 ! {start, FirstPidList}
-          end
-      end,
-      receive
-        {Spawner1, ready} ->
-          receive
-            {Spawner2, ready} ->
-              State#spawner_state{
-                slave_spawners = [Spawner1, Spawner2]
-               }
-          end
-      end
-  end.
-
-initialize_slave_spawner(Master, MaxProcesses) ->
-  Fun = fun() -> wait_activation() end,
-  MyFirstPid = spawn_link(Fun),
-  Master ! {self(), pid_to_list(MyFirstPid)},
-  receive
-    {start, FirstPidList} ->
-      FirstPid = list_to_pid(FirstPidList),
-      FirstPid = discard_pids(MyFirstPid, FirstPid),
-      Master ! {self(), ready},
-      AvailableProcesses = [FirstPid| [spawn_link(Fun) || _ <- lists:seq(1, MaxProcesses-1)]],
-      SlaveState =
-        #spawner_state{
-           available_processes = queue:from_list(AvailableProcesses), 
-           max_processes = MaxProcesses,
-           parallel = true
-          },
-        spawner_loop(SlaveState)
+      Fun = fun() -> initialize_slave_spawner(Master, MaxProcesses) end,
+      Spawners = [spawn_link(Node, Fun) || Node <- Nodes],
+      InitialPidList = get_initial_pid(Spawners, []),
+      [Spawner ! {start, InitialPidList} || Spawner <- Spawners],
+      wait_for_spawners(Spawners),
+      State#spawner_state{
+        slave_spawners = Spawners
+       }
   end.
 
 wait_activation() ->
@@ -117,6 +87,47 @@ wait_activation() ->
     stop -> ok;
     {Pid, stop} ->
       Pid ! done
+  end.
+
+%%-----------------------------------------------------------------------------
+
+get_initial_pid([], InitialPidLists) ->
+  Pids = [list_to_pid(PidList) || PidList <- InitialPidLists],
+  pid_to_list(lists:max(Pids));
+get_initial_pid(Spawners, InitialPidLists) ->
+  receive
+    {Spawner, InitialPidList} ->
+      true = lists:member(Spawner, Spawners),
+      get_initial_pid(lists:delete(Spawner, Spawners), [InitialPidList|InitialPidLists])
+  end.
+
+wait_for_spawners([]) ->
+  ok;
+wait_for_spawners(Spawners) ->
+  receive {Spawner, ready} ->
+      true = lists:member(Spawner, Spawners),
+      wait_for_spawners(lists:delete(Spawner, Spawners))
+  end.
+
+
+initialize_slave_spawner(Master, MaxProcesses) ->
+  Fun = fun() -> wait_activation() end,
+  MyInitialPid = spawn_link(Fun),
+  Master ! {self(), pid_to_list(MyInitialPid)},
+  receive
+    {start, InitialPidList} ->
+      InitialPid = list_to_pid(InitialPidList),
+      InitialPid = discard_pids(MyInitialPid, InitialPid),
+      Master ! {self(), ready},
+      AvailableProcesses =
+        [InitialPid| [spawn_link(Fun) || _ <- lists:seq(1, MaxProcesses-1)]],
+      SlaveState =
+        #spawner_state{
+           available_processes = queue:from_list(AvailableProcesses), 
+           max_processes = MaxProcesses,
+           parallel = true
+          },
+        spawner_loop(SlaveState)
   end.
 
 discard_pids(TargetPid, TargetPid) ->
@@ -135,7 +146,7 @@ spawner_loop(State) ->
     {Caller, get_new_process, _Symbol} ->
       case queue:out(ProcessQueue) of
         {empty, ProcessQueue} ->
-          Caller ! {process_limit_exceeded, State#spawner_state.max_processes},
+          Caller ! {process_limit_exceeded, State#spawner_state.max_processes - length(registered())},
           spawner_loop(State);
         {{value, Process}, NewProcessQueue} ->
           unlink(Process),
@@ -174,7 +185,7 @@ master_loop(State) ->
               master_loop(State#spawner_state{allocated_processes = NewProcessMap})
           catch
             throw:Reason ->
-              Reason = {process_limit_exceeded, State#spawner_state.max_processes},
+              Reason = {process_limit_exceeded, State#spawner_state.max_processes - length(registered())},
               Caller ! Reason,
               master_loop(State)
           end

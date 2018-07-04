@@ -19,7 +19,7 @@ start(Options) ->
   Path = path_to_ebin(),
   %%Args = "-boot start_clean -noshell -pa " ++ Path
   Args = "-noshell -pa " ++ Path,
-  NumberOfSlaves = 2,
+  NumberOfSlaves = ?number_of_schedulers,
   start_slaves(Host, NamePrefix, Args, NumberOfSlaves).
 
 start_slaves(_, _, _, 0) -> [];
@@ -41,7 +41,7 @@ start_epmd(TriesLeft) ->
 hashed_name(Args) ->
   PathValue = file:get_cwd(),
   Hash = binary:decode_unsigned(erlang:md5(term_to_binary([PathValue|Args]))),
-  [HashString] = io_lib:format("~.16b",[Hash]),
+  HashString = io_lib:format("~.16b",[Hash]),
   Name = "node" ++ HashString,
   list_to_atom(Name).
 

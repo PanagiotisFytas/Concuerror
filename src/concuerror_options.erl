@@ -9,6 +9,7 @@
    , scheduling/0
    , scheduling_bound_type/0
    ]).
+-export_type([log_messages/0]).
 
 %%%-----------------------------------------------------------------------------
 
