@@ -89,7 +89,8 @@ start_link(Options) ->
 
 estimation_style(Options) ->
   Verbosity = ?opt(verbosity, Options),
-  case concuerror_logger:showing_progress(Verbosity) of
+  Parallel = ?opt(parallel, Options),
+  case concuerror_logger:showing_progress(Verbosity) and not Parallel of
     false -> unknown;
     true ->
       Style =
