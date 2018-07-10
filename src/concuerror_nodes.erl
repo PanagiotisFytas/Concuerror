@@ -17,6 +17,7 @@ start(Options) ->
   {ok, Host} = inet:gethostname(),
   NamePrefix = atom_to_list(Name),
   Path = path_to_ebin(),
+  %% TODO figure out correct args
   %%Args = "-boot start_clean -noshell -pa " ++ Path
   Args = "-noshell -pa " ++ Path,
   NumberOfSlaves = ?number_of_schedulers,

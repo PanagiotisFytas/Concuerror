@@ -6,7 +6,7 @@
 %%------------------------------------------------------------------------------
 
 %% Internal export
--export([maybe_cover_compile/0, maybe_cover_export/1]).
+-export([maybe_cover_compile/0, maybe_cover_export/1, get_scheduler_status/2]).
 
 %%------------------------------------------------------------------------------
 
@@ -49,7 +49,13 @@ start(Options, LogMsgs) ->
   Processes = ets:new(processes, [public]),
   Estimator = concuerror_estimator:start_link(Options),
   LoggerOptions = [{estimator, Estimator},{processes, Processes}|Options],
-  Logger = concuerror_logger:start(LoggerOptions),
+  Logger =
+    case Parallel of 
+      false ->
+        concuerror_logger:start(LoggerOptions);
+      true ->
+        ?opt(logger_wrapper, Options)
+    end,
   _ = [?log(Logger, Level, Format, Args) || {Level, Format, Args} <- LogMsgs],
   SchedulerOptions = 
     case Parallel of
@@ -65,7 +71,23 @@ start(Options, LogMsgs) ->
   {Pid, Ref} =
     spawn_monitor(concuerror_scheduler, run, [SchedulerOptions]),
   Reason = receive {'DOWN', Ref, process, Pid, R} -> R end,
-  SchedulerStatus =
+  ExitStatus =
+    case Parallel of
+      false ->
+        concuerror_process_spawner:stop(?opt(process_spawner, SchedulerOptions)),        
+        SchedulerStatus = get_scheduler_status(Reason, Logger),
+        concuerror_logger:stop(Logger, SchedulerStatus);
+      true ->
+        Reason
+    end,
+  concuerror_estimator:stop(Estimator),
+  ets:delete(Processes),
+  ExitStatus.
+
+-spec get_scheduler_status(term(), pid()) -> normal | failed.
+
+get_scheduler_status(Reason, Logger) ->
+  SchedulerStatus = 
     case Reason =:= normal of
       true -> normal;
       false ->
@@ -73,16 +95,7 @@ start(Options, LogMsgs) ->
         failed
     end,
   ?trace(Logger, "Reached the end!~n",[]),
-  ExitStatus = concuerror_logger:stop(Logger, SchedulerStatus),
-  concuerror_estimator:stop(Estimator),
-  case Parallel of 
-    false ->
-      concuerror_process_spawner:stop(?opt(process_spawner, SchedulerOptions));
-    true ->
-      ok
-  end,
-  ets:delete(Processes),
-  ExitStatus.
+  SchedulerStatus.
 
 %%------------------------------------------------------------------------------
 
@@ -90,12 +103,14 @@ start_parallel(RawOptions, OldOptions) ->
   Nodes = concuerror_nodes:start(RawOptions),
   % The the process_spawner starts and stops will be fixed when I make the
   % process_spawner a gen_server
-  SpawnerOptions = [{nodes, Nodes}|OldOptions],
-  ProcessSpawner = concuerror_process_spawner:start(SpawnerOptions),
+  LoggerOptions = [{nodes, Nodes}|OldOptions],
+  LoggerWrapper = concuerror_logger:start_wrapper(LoggerOptions),
+  ProcessSpawner = concuerror_process_spawner:start(LoggerOptions),
   Controller = concuerror_controller:start(Nodes),
   AdditionalOptionts = [{nodes, Nodes},
                         {process_spawner, ProcessSpawner},
-                        {controller, Controller}],
+                        {controller, Controller},
+                        {logger_wrapper, LoggerWrapper}],
   StartFun =
     fun() ->
 	Status =
@@ -108,21 +123,8 @@ start_parallel(RawOptions, OldOptions) ->
 	  exit(Status)
     end,
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
-  ExitStatus = get_exit_status(SchedulerWrappers, ok),
-  %% ExitStatus = 
-  %%   receive
-  %%     {'DOWN', Ref1, process, Pid1, ExitStatus1} ->
-  %%       ExitStatus1;
-  %%     {'DOWN', Ref2, process, Pid2, ExitStatus2} -> 
-  %%       ExitStatus2
-  %%   end,
-  %% _EX = 
-  %%   receive
-  %%     {'DOWN', Ref1, process, Pid1, ES1} ->
-  %%       ES1;
-  %%     {'DOWN', Ref2, process, Pid2, ES2} -> 
-  %%       ES2
-  %%   end,
+  CombinedStatus = get_combined_status(SchedulerWrappers),
+  ExitStatus = concuerror_logger:stop(LoggerWrapper, CombinedStatus),
   %% ok = concuerror_controller:stop(Controller),
   concuerror_process_spawner:stop(ProcessSpawner),
   ok = concuerror_nodes:clear(Nodes),
@@ -135,22 +137,29 @@ spawn_scheduler_wrappers([Node|Rest], StartFun) ->
   Ref = monitor(process, Pid),
   [{Pid, Ref} | spawn_scheduler_wrappers(Rest, StartFun)].
 
-get_exit_status([], Status) ->
+get_combined_status(SchedulerWrappers) ->
+  receive
+    {'DOWN', Ref, process, Pid, ExitStatus} ->
+      true = lists:member({Pid, Ref}, SchedulerWrappers),
+      Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
+      get_combined_status(Rest, ExitStatus)
+  end.
+
+get_combined_status([], Status) ->
   Status;
-get_exit_status(SchedulerWrappers, Status) ->
+get_combined_status(SchedulerWrappers, Status) ->
   receive
     {'DOWN', Ref, process, Pid, ExitStatus} ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
       Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
       NewStatus =
-        case Status =:= ok of
-          true ->
+        case Status of
+          normal ->
             ExitStatus;
           false ->
             Status
-            %% TODO figure out what should happen when e.g. Status = exit and ExitStatus = fail
         end,
-      get_exit_status(Rest, NewStatus)
+      get_combined_status(Rest, NewStatus)
   end.
       
 %%------------------------------------------------------------------------------

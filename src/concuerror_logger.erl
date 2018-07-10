@@ -5,6 +5,7 @@
 -export([graph_set_node/3, graph_new_node/4, graph_race/3]).
 -export([print_log_message/3]).
 -export([showing_progress/1, progress_help/0]).
+-export([start_wrapper/1]).
 
 -include("concuerror.hrl").
 
@@ -82,6 +83,15 @@ timediff(After, Before) ->
           verbosity                    :: log_level()
          }).
 
+-record(wrapper_state, {
+          current_job      :: none | reference(),
+          calls_to_logger  :: maps:map(),
+%%          controller       :: pid(),
+          jobs             :: queue:queue(),
+          logger           :: pid(),
+          total_schedulers :: pos_integer()
+         }).
+
 %%------------------------------------------------------------------------------
 
 -spec start(concuerror_options:options()) -> pid().
@@ -95,7 +105,7 @@ start(Options) ->
         Parent ! Ref,
         loop(State)
     end,
-  P = spawn_link(Fun),
+  P = spawn_link(Fun),  
   receive
     Ref -> P
   end.
@@ -172,13 +182,13 @@ delete_props([Key|Rest], Proplist) ->
 -spec bound_reached(logger()) -> ok.
 
 bound_reached(Logger) ->
-  Logger ! bound_reached,
+  Logger ! {bound_reached, self()},
   ok.
 
 -spec plan(logger()) -> ok.
 
 plan(Logger) ->
-  Logger ! plan,
+  Logger ! {plan, self()},
   ok.
 
 -spec complete(logger(), concuerror_scheduler:interleaving_result()) -> ok.
@@ -193,7 +203,7 @@ complete(Logger, Warnings) ->
 -spec log(logger(), log_level(), term(), string(), [term()]) -> ok.
 
 log(Logger, Level, Tag, Format, Data) ->
-  Logger ! {log, Level, Tag, Format, Data},
+  Logger ! {log, Level, Tag, Format, Data, self()},
   ok.
 
 -spec stop(logger(), term()) -> concuerror:exit_status().
@@ -207,25 +217,25 @@ stop(Logger, Status) ->
 -spec print(logger(), stream(), string()) -> ok.
 
 print(Logger, Type, String) ->
-  Logger ! {print, Type, String},
+  Logger ! {print, Type, String, self()},
   ok.
 
 -spec time(logger(), term()) -> ok.
 
 time(Logger, Tag) ->
-  Logger ! {time, Tag},
+  Logger ! {time, Tag, self()},
   ok.
 
 -spec race(logger(), {index(), event()}, {index(), event()}) -> ok.
 
 race(Logger, EarlyEvent, Event) ->
-  Logger ! {race, EarlyEvent, Event},
+  Logger ! {race, EarlyEvent, Event, self()},
   ok.
 
 -spec set_verbosity(logger(), ?lquiet..?MAX_VERBOSITY) -> ok.
 
 set_verbosity(Logger, Verbosity) ->
-  Logger ! {set_verbosity, Verbosity},
+  Logger ! {set_verbosity, Verbosity, self()},
   ok.
 
 -spec print_log_message(log_level(), string(), [term()]) -> ok.
@@ -251,7 +261,7 @@ loop(State) ->
         after
           0 -> Stop
         end;
-      M -> M
+      M -> fix_message(M)
     end,
   loop(Message, State).
 
@@ -1005,18 +1015,18 @@ add_seps_to_int(Other) -> io_lib:format("~w", [Other]).
 -spec graph_set_node(logger(), unique_id(), unique_id()) -> ok.
 
 graph_set_node(Logger, Parent, Sibling) ->
-  Logger ! {graph, {set_node, Parent, Sibling}},
+  Logger ! {graph, {set_node, Parent, Sibling}, self()},
   ok.
 
 -spec graph_new_node(logger(), unique_id(), index(), event()) -> ok.
 
 graph_new_node(Logger, Ref, Index, Event) ->
-  Logger ! {graph, {new_node, Ref, Index, Event}},
+  Logger ! {graph, {new_node, Ref, Index, Event}, self()},
   ok.
 
 -spec graph_race(logger(), unique_id(), unique_id()) -> ok.
 graph_race(Logger, EarlyRef, Ref) ->
-  Logger ! {graph, {race, EarlyRef, Ref}},
+  Logger ! {graph, {race, EarlyRef, Ref}, self()},
   ok.
 
 graph_preamble({disable, ""}) -> disable;
@@ -1134,3 +1144,158 @@ print_symbolic_info() ->
     "Showing PIDs as \"<symbolic name(/last registered name)>\""
     " ('-h symbolic_names').~n",
   ?unique(self(), ?linfo, Tip, []).
+
+%%------------------------------------------------------------------------------
+%% Logger Wrapper functions, used for parallel mode
+%%------------------------------------------------------------------------------
+
+-spec start_wrapper(concuerror_options:options()) -> pid().
+
+start_wrapper(Options) ->
+  Logger = start(Options),
+  Parent = self(),
+  Ref = make_ref(),
+  WrapperFun =
+    fun() ->
+        WrapperState = initialize_wrapper(Options, Logger),
+        Parent ! Ref,
+        wrapper_loop(WrapperState)
+    end,
+  P = spawn_link(WrapperFun),
+  receive
+    Ref ->
+      P
+  end.
+
+
+initialize_wrapper(Options, Logger) ->
+  Nodes = ?opt(nodes, Options),
+  #wrapper_state{
+     current_job = none,
+     calls_to_logger = maps:from_list([{Node, queue:new()} || Node <- Nodes]),
+%%     controller = ?opt(controller, Options),
+     jobs = queue:new(),
+     logger = Logger,
+     total_schedulers = ?number_of_schedulers
+    }. 
+
+%% wrapper_loop(Logger, LoggerStatus, Queues, Jobs) 
+wrapper_loop(State)  ->
+  #wrapper_state{
+     current_job = CurrentJob,
+     calls_to_logger = LoggerCalls,
+     jobs = Jobs,
+     logger = Logger
+    } = State,
+  receive
+    Ref when Ref =:= CurrentJob ->
+      {Head, JobsLeft} = queue:out(Jobs),
+      NewLoggerJob = 
+        case Head of
+          {value, NextJob} ->
+            {NextRef, NextFun} = NextJob,
+            _ = spawn_link(NextFun),
+            NextRef;
+          empty ->
+            none
+        end,
+      UpdatedState =
+        State#wrapper_state{
+          jobs = JobsLeft,
+          current_job = NewLoggerJob
+         },
+      wrapper_loop(UpdatedState);
+    {complete, Warn, Scheduler, Ref} ->
+      Scheduler ! Ref, %% complete is a synchronus call to the logger
+      Node = node(Scheduler),
+      LogQueue = maps:get(Node, LoggerCalls),
+      CompleteLogQueue = queue:in({complete, Warn, self(), Ref}, LogQueue),
+      LogFun =  fun() -> log_queue(Logger, self(), Ref, CompleteLogQueue) end,
+      LogJob = {Ref, LogFun},
+      {MaybeUpdatedCurrentJob, MaybeUpdatedJobs} = 
+      case CurrentJob of
+        none ->
+          _ = spawn_link(LogFun),
+          true = queue:is_empty(Jobs),
+          {Ref, Jobs};
+        CurrentJobRef when is_reference(CurrentJobRef) ->
+          {CurrentJobRef, queue:in(LogJob, Jobs)}
+        end,
+      UpdatedState =
+        State#wrapper_state{
+          jobs = MaybeUpdatedJobs,
+          current_job = MaybeUpdatedCurrentJob,
+          calls_to_logger = maps:update(Node, queue:new(), LoggerCalls)
+         },
+      wrapper_loop(UpdatedState);
+    {stop, CombinedStatus, ControllerParent} ->
+      %% makes sure that logger is empty
+      ok = finish_up(CurrentJob, Jobs),
+      SchedulerStatus = concuerror:get_scheduler_status(CombinedStatus, Logger),
+      ExitStatus = stop(Logger, SchedulerStatus),
+      ControllerParent ! {stopped, ExitStatus};
+    OtherLogRequest ->
+      %% Asyncronus request
+      RequestList = tuple_to_list(OtherLogRequest),
+      Scheduler = lists:last(RequestList),
+      Node = node(Scheduler),
+      LogQueue = maps:get(Node, LoggerCalls),
+      UpdatedLogQueue = queue:in(OtherLogRequest, LogQueue),
+      UpdatedLoggerCalls = maps:update(Node, UpdatedLogQueue, LoggerCalls),
+      UpdatedState = State#wrapper_state{calls_to_logger = UpdatedLoggerCalls},
+      wrapper_loop(UpdatedState)
+  end.
+
+log_queue(Logger, Wrapper, Ref, CompleteLogQueue) ->
+  _ = [Logger ! Call || Call <- queue:to_list(CompleteLogQueue)],
+  receive
+    Ref ->
+      Wrapper ! Ref
+  end.
+
+finish_up(none, JobsLeft) ->
+  true = queue:is_empty(JobsLeft),
+  ok;
+finish_up(CurrentJob, Jobs) ->
+  receive
+    Ref when Ref =:= CurrentJob ->
+      {Head, JobsLeft} = queue:out(Jobs),
+      NewLoggerJob = 
+        case Head of
+          {value, NextJob} ->
+            {NextRef, NextFun} = NextJob,
+            _ = spawn_link(NextFun),
+            NextRef;
+          empty ->
+            none
+        end,
+      finish_up(NewLoggerJob, JobsLeft)
+  end.
+
+%%------------------------------------------------------------------------------
+
+fix_message({plan, _}) ->
+  plan;
+fix_message({log, Level, Tag, Format, Data, _}) ->
+  {log, Level, Tag, Format, Data};
+fix_message({race, EarlyEvent, Event, _}) ->
+  {race, EarlyEvent, Event};
+fix_message({print, Type, String, _}) ->
+  {print, Type, String};
+fix_message({time, Tag, _}) ->
+  {time, Tag};
+fix_message({bound_reached, _}) ->
+  bound_reached;
+fix_message({set_verbosity, Verbosity, _}) ->
+  {set_verbosity, Verbosity};
+fix_message({graph, {set_node, Parent, Sibling}, _}) ->
+  {graph, {set_node, Parent, Sibling}};
+fix_message({graph, {new_node, Ref, Index, Event}, _}) ->
+  {graph, {new_node, Ref, Index, Event}};
+fix_message({graph, {race, EarlyRef, Ref}, _}) ->
+  {graph, {race, EarlyRef, Ref}};
+fix_message(Message) ->
+  Message.
+
+
+
