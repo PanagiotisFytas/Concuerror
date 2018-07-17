@@ -47,7 +47,7 @@
              ]).
 
 %% Controller Interface
--export([distribute_interleavings/2]).
+-export([distribute_interleavings/1]).
 
 %% =============================================================================
 %% DATA STRUCTURES & TYPES
@@ -151,9 +151,9 @@
           use_unsound_bpor             :: boolean(),
           controller                   :: pid() | undefined,
           parallel                     :: boolean(),
-          granularity = undefined      :: undefined | coarse | grained,
-          replay_mode = undefined      :: undefined | pseudo | actual 
-          %% TODO check if replay_mode and granularity are needed 
+          replay_mode                  :: undefined | pseudo | actual,
+          scheduler_number = undefined :: pos_integer() | undefined
+          %% TODO check if replay_mode is needed 
          }).
 %-------------------------------------------------------------------------------
 -ifdef(BEFORE_OTP_17).
@@ -288,12 +288,24 @@ run(Options) ->
   ?time(Logger, "Exploration start"),
   case Parallel of
     false ->
+      StartTime = erlang:monotonic_time(),
       Ret = explore_scheduling(InitialState),
       concuerror_callback:cleanup_processes(Processes),
+      EndTime = erlang:monotonic_time(),
+      concuerror_controller:report_stats(maps:new(), StartTime, EndTime),
       Ret;
     true ->
       Controller ! {scheduler, self()},
-      Ret = loop(InitialState),
+      Ret =
+        receive
+          {scheduler_number, SchedulerNumber} ->
+            FixedState =
+              InitialState#scheduler_state{
+                scheduler_number = SchedulerNumber,
+                replay_mode = pseudo
+               }, %% TODO fix this
+            loop(FixedState)
+        end,
       concuerror_callback:cleanup_processes(Processes),
       Controller ! finished,
       Ret
@@ -319,14 +331,15 @@ explore_scheduling_parallel(State) ->
   Controller = NewState#scheduler_state.controller,
   case HasMore of
     true ->
-%      concuerror_callback:reset_processes(State#scheduler_state.processes),
-      Controller ! {has_more, self(), make_state_transferable(NewState)};
+      %% concuerror_callback:reset_processes(State#scheduler_state.processes),
+      LoadBalancedState = unload_work(NewState),
+      explore_scheduling_parallel(LoadBalancedState);
     false ->
-%      concuerror_callback:reset_processes(State#scheduler_state.processes),
+      %% concuerror_callback:reset_processes(State#scheduler_state.processes),
       Controller ! {done, self()}
   end,
   NewState.
-  
+
 loop(State) ->
   receive
     start ->
@@ -336,48 +349,63 @@ loop(State) ->
       ReceivedState = revert_state(State, TransferableState),
       FixedState =
         ReceivedState#scheduler_state{
-          granularity = fine,
           replay_mode = actual
          },
       NewState = explore_scheduling_parallel(FixedState),
       loop(NewState);
-    {explore, non_stop, TransferableState} ->
-      ReceivedState = revert_state(State, TransferableState),
-      FixedState =
-        ReceivedState#scheduler_state{
-          granularity = coarse,
-          replay_mode = actual
-         },
-      explore_scheduling(FixedState), %% TODO fix this
-      #scheduler_state{controller = Controller} = State,
-      Controller ! {done, self()},
-      loop(State);
+    %% {explore, non_stop, TransferableState} ->
+    %%   ReceivedState = revert_state(State, TransferableState),
+    %%   FixedState =
+    %%     ReceivedState#scheduler_state{
+    %%       replay_mode = actual
+    %%      },
+    %%   explore_scheduling(FixedState), %% TODO fix this
+    %%   #scheduler_state{controller = Controller} = State,
+    %%   Controller ! {done, self()},
+    %%   loop(State);
     finish ->
       ok
   end.
 
 %%------------------------------------------------------------------------------
 
-% TODO remove these debugging function
+backtrack_points([]) -> 0;
+backtrack_points([TraceState|Rest]) ->
+  backtrack_points_aux(TraceState#trace_state.wakeup_tree) + backtrack_points(Rest).
 
-%% show_procs(State) ->
-%%   #scheduler_state{
-%%      processes = Processes
-%%     } = State,
-%%   Test = [ets:tab2list(Processes)],
-%%   State#scheduler_state.controller ! {procs, self(), Test},
-%%   receive {show_exit, Exit} ->
-%%       exit(Exit)
-%%   end.
+backtrack_points_aux([]) -> 0;
+backtrack_points_aux([BacktrackEntry|Rest]) ->
+  1
+    + backtrack_points_aux(BacktrackEntry#backtrack_entry.wakeup_tree)
+    + backtrack_points_aux(Rest).
 
-%% show_trace(State) ->
-%%   #scheduler_state{
-%%      trace = Trace
-%%     } = State,
-%%   State#scheduler_state.controller ! {state, self(), Trace},
-%%   receive {show_exit, Exit} ->
-%%       exit(Exit)
-%%   end.
+unload_work(State) ->
+  #scheduler_state{
+     controller = Controller,
+     trace = Trace,
+     dpor = DPOR
+    } = State,
+  BacktrackPoints = backtrack_points(State#scheduler_state.trace),
+  LoadBalancedState =
+    case BacktrackPoints > ?balancing_limit
+      %% andalso State#scheduler_state.scheduler_number =:= 1
+      %% andalso State#scheduler_state.interleaving_id =:= 1 
+    of
+      false ->
+        State;
+      true ->
+        Controller ! {request_idle, self()},
+        receive
+          no_idle_schedulers ->
+            State;
+          {scheduler, IdleScheduler} ->
+            {MyTrace, UnloadedTrace} = distribute_interleavings(Trace),
+            UnloadedState = State#scheduler_state{trace = UnloadedTrace},
+            IdleScheduler ! {explore, make_state_transferable(UnloadedState)},
+            NewState = State#scheduler_state{trace = MyTrace},
+            unload_work(NewState)
+        end
+    end.
 
 %%------------------------------------------------------------------------------
 
@@ -397,7 +425,14 @@ explore(State) ->
       FatalCrashState =
         add_error(fatal, discard_last_trace_state(UpdatedState)),
       catch log_trace(FatalCrashState),
-      % exit({Class, Reason, Stack}), % TODO remove
+      %% TODO fix this i.e the way the controller handles 
+      %% scheduler crashes
+      case State#scheduler_state.parallel of
+        true ->
+          State#scheduler_state.controller ! {done, self()};
+        false ->
+         ok
+      end,
       erlang:raise(Class, Reason, Stack)
   end.
 
@@ -1799,14 +1834,21 @@ replay_prefix(Trace, State) ->
   NewState = State#scheduler_state{last_scheduled = FirstProcess},
   replay_prefix_aux(lists:reverse(Trace), NewState).
 
-replay_prefix_aux([_], State) ->
+replay_prefix_aux([_Woot], State) ->
+  %% TODO : 
+  %% when another interleaving is replayed the old interleaving (more correctly
+  %% the traces of the first inteleaving that are always before a backtrack)
+  %% are never actually replayed therefore when working in parallel mode
+  %% pseudo replay_mode cannot currently work. Maybe fix this.
+  %%
   %% Last state has to be properly replayed.
-  case State#scheduler_state.granularity of
-    coarse ->
-      State#scheduler_state{replay_mode = pseudo};
-    _ ->
-      State
-  end;
+  %% case State#scheduler_state.replay_mode =:= actual of
+  %%   true ->
+  %%     %% State#scheduler_state{replay_mode = pseudo};
+  %%   false ->
+  %%     State
+  %% end;
+  State;
 replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
   #scheduler_state{
      logger = _Logger,
@@ -1815,12 +1857,12 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
      replay_mode = ReplayMode
     } = State,
   ?debug(_Logger, "~s~n", [?pretty_s(I, Event)]),
-  {ok, #event{actor = Actor} = NewEvent} = 
-    case Parallel andalso ReplayMode =:= actual of 
+  {ok, #event{actor = Actor} = NewEvent} =
+    case ReplayMode =:= actual of 
       false ->
         get_next_event_backend(Event, State);
       true ->
-        get_next_event_backend(Event#event{event_info = undefined},State)
+        get_next_event_backend(Event#event{event_info = undefined}, State)
     end,
   try
     true = Event =:= NewEvent
@@ -1834,7 +1876,6 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
         %% {erlang,spawn,[erlang,apply,[NewFun,[]]]} = NewEventInfo#builtin_event.mfargs,
         %% exit(erlang:fun_info(Fun), erlang:fun_info(NewFun));
         false ->
-          #scheduler_state{print_depth = PrintDepth} = State,
           ?crash({replay_mismatch, I, Event, NewEvent, PrintDepth})
       end
   end,
@@ -1846,8 +1887,8 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
   NewState = State#scheduler_state{last_scheduled = NewLastScheduled},
   replay_prefix_aux(Rest, maybe_log(Event, NewState, I)).
 
-logically_equal(#scheduler_state{parallel = Parallel}, _, _)
-  when not Parallel ->
+logically_equal(#scheduler_state{replay_mode = ReplayMode}, _, _)
+  when ReplayMode =:= pseudo ->
   false;
 logically_equal(_,
                 #event{event_info = EventInfo} = Event,
@@ -2037,19 +2078,50 @@ bound_reached(Logger) ->
 %% Controller Interface
 %%------------------------------------------------------------------------------
 
--spec distribute_interleavings(reduced_scheduler_state(), non_neg_integer()) ->
-                                  [reduced_scheduler_state()].
+%% -spec distribute_interleavings(reduced_scheduler_state(), non_neg_integer()) ->
+%%                                   [reduced_scheduler_state()].
 
-distribute_interleavings(TransferableState, AvailableSchedulers) -> 
-  #reduced_scheduler_state{trace = Trace} = TransferableState,
-  Traces = distribute_interleavings_aux(Trace, AvailableSchedulers, []),
-  [TransferableState#reduced_scheduler_state{trace = T} || T <- Traces].
+%% distribute_interleavings(TransferableState, AvailableSchedulers) -> 
+%%   #reduced_scheduler_state{trace = Trace} = TransferableState,
+%%   Traces = distribute_interleavings_aux(Trace, AvailableSchedulers, []),
+%%   [TransferableState#reduced_scheduler_state{trace = T} || T <- Traces].
 
-distribute_interleavings_aux(_, 0, Traces) ->
-  Traces;
-distribute_interleavings_aux(Trace, N, Traces) ->
-  distribute_interleavings_aux(Trace, N-1, [Trace|Traces]).
+%% distribute_interleavings_aux(_, 0, Traces) ->
+%%   Traces;
+%% distribute_interleavings_aux(Trace, N, Traces) ->
+%%   distribute_interleavings_aux(Trace, N-1, [Trace|Traces]).
 
+-spec distribute_interleavings([trace_state()]) -> {[trace_state()], [trace_state()]}.
+
+distribute_interleavings(Trace) ->
+  distribute_interleavings_aux(lists:reverse(Trace),[]).
+
+distribute_interleavings_aux([#trace_state{wakeup_tree = WuT} = TraceState | Rest],
+                             RevTracePrefix)
+  when WuT =:= [] ->
+  distribute_interleavings_aux(Rest, [TraceState|RevTracePrefix]);
+distribute_interleavings_aux([TraceState|Rest], RevTracePrefix) ->
+  #trace_state{
+     wakeup_tree = WuT,
+     sleep_set = SleepSet
+    } = TraceState,
+  Eventify = [Entry#backtrack_entry.event || Entry <- WuT],
+  [UnloadedEntry|RestBacktrack] = WuT,
+  [UnloadedBacktrackEvent|RestBacktrackEvents] = Eventify,
+  MyTraceState =
+    TraceState#trace_state{
+      wakeup_tree = RestBacktrack,
+      sleep_set = [UnloadedBacktrackEvent|SleepSet]
+     },
+  UnloadedTraceState =
+    TraceState#trace_state{
+      wakeup_tree = [UnloadedEntry],
+      sleep_set = RestBacktrackEvents ++ SleepSet %% TODO check if this is needed
+     },
+  MyTrace = lists:reverse(Rest) ++ [MyTraceState] ++ RevTracePrefix,
+  UnloadedTrace = [UnloadedTraceState]  ++ RevTracePrefix,
+  {MyTrace, UnloadedTrace}.
+    
 
 %%------------------------------------------------------------------------------
 %% Playable state -> Tranferable State

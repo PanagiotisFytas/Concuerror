@@ -184,6 +184,7 @@
             [list_to_pid(PidList) || PidList <- PidLists]
            ))).
 -define(number_of_schedulers, 2).
+-define(balancing_limit, 1).
 
 -ifdef(BEFORE_OTP_17).
 -define(to_list(Dict), dict:to_list(Dict)).

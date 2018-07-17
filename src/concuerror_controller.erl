@@ -2,10 +2,16 @@
 
 -module(concuerror_controller).
 
--export([start/1, stop/1]).
+-export([start/1, stop/1, report_stats/3]).
 
 -include("concuerror.hrl").
 
+-record(controller_status, {
+          busy_times       :: maps:map(),
+          busy             :: [pid()],
+          idle             :: [pid()],
+          scheduling_start :: integer()
+         }).
 %%------------------------------------------------------------------------------
 
 -spec start([node()]) -> concuerror:exit_status().
@@ -18,119 +24,110 @@ start(Nodes) ->
   spawn_link(Fun).
 
 initialize_controller(Nodes) ->
-  Schedulers = get_schedulers(length(Nodes)),
-  [InitialScheduler|Rest] = Schedulers,
+  N = length(Nodes),
+  Schedulers = get_schedulers(N, N),
+  SchedulerPids = [Pid || {Pid, _} <- Schedulers],
+  [InitialScheduler|Rest] = SchedulerPids,
   InitialScheduler ! start,
+  SchedulingStart = erlang:monotonic_time(),
   Busy = [InitialScheduler],
   Idle = Rest,
-  controller_loop(Schedulers, Idle, Busy).
+  InitTimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
+  Fun =
+    fun({SchedId, undefined, 0}) ->
+        {SchedId, SchedulingStart, 0}
+    end,
+  BusyTimes = maps:update_with(InitialScheduler, Fun, InitTimes),
+  InitialStatus =
+    #controller_status{
+       busy_times = BusyTimes,
+       busy = Busy,
+       idle = Idle,
+       scheduling_start = SchedulingStart
+      },
+  controller_loop(InitialStatus).
  
-get_schedulers(0) -> [];
-get_schedulers(N) ->
+get_schedulers(0, _) -> [];
+get_schedulers(I, N) ->
   receive
     {scheduler, Pid} ->
-      [Pid | get_schedulers(N-1)]
+      SchedulerId = N-I+1,
+      Pid ! {scheduler_number, N-I+1},
+      [{Pid, SchedulerId} | get_schedulers(I-1, N)]
   end.
 
-controller_loop(Schedulers, _, []) ->
-  [Scheduler ! finish || Scheduler <- Schedulers],
-  [receive finish -> ok end || _ <- Schedulers];
-controller_loop(Schedulers, _Idle, _Busy) ->
+controller_loop(#controller_status{busy = Busy} = Status)
+  when Busy =:= [] ->
+  SchedulingEnd = erlang:monotonic_time(),
+  #controller_status{
+     busy_times = BusyTimes,
+     idle = Idle,
+     scheduling_start = SchedulingStart
+    } = Status,
+  [Scheduler ! finish || Scheduler <- Idle],
+  [receive finished -> ok end || _ <- Idle],
   receive
-    %% {has_more, Scheduler1, TransferableState} ->
-    %%   receive
-    %%     {has_more, Scheduler2, _TranferableState2} ->
-    %%       %TransferableState = _TranferableState2,
-    %%       Scheduler2 ! {explore, TransferableState},
-    %%       Scheduler1 ! {explore, TransferableState},
-    %%       NewBusy = [Scheduler2, Scheduler1],
-    %%       NewIdle = [],
-    %%       controller_loop(Schedulers, NewIdle, NewBusy)
-    %%   end;
-    {has_more, Scheduler, TransferableState} ->
-      true = lists:member(Scheduler, _Busy),
-      _TempBusy = lists:delete(Scheduler, _Busy),
-      TempIdle = [Scheduler|_Idle],
-      States =
-        concuerror_scheduler:distribute_interleavings(TransferableState, length(TempIdle)),
-      %% {NewIdle, NewBusy} = start_schedulers(States, TempIdle, TempBusy),
-      [Other] = _Idle,
-      [H1,H2] = States,
-      Scheduler ! {explore, non_stop, H1},
-      Other ! {explore, non_stop, H2},
-      NewIdle = [],
-      NewBusy = [Scheduler, Other],
-      controller_loop(Schedulers, NewIdle, NewBusy);
-      %% [Scheduler2, Scheduler3] = _Idle,
-      %% Scheduler3 ! {explore, TransferableState},
-      %% Scheduler2 ! {explore, TransferableState},
-      %% Scheduler1 ! {explore, TransferableState},
-      %% NewBusy = [Scheduler3, Scheduler2, Scheduler1],
-      %% NewIdle = [],
-      %% controller_loop(Schedulers, NewIdle, NewBusy);
-    {done, Scheduler} ->
-      NewBusy = lists:delete(Scheduler, _Busy),
-      NewIdle = [Scheduler|_Idle],
-      controller_loop(Schedulers, NewIdle, NewBusy)
-    %% {finish, Pid} ->
-    %%   [Scheduler ! finish || Scheduler <- Schedulers],
-    %%   [receive finish -> ok end || _ <- Schedulers],
-    %%   Pid ! done
-    %% {has_more, Scheduler1, TransferableState} ->
-    %%   [Scheduler1] = _Busy,
-    %%   [Scheduler2] = _Idle,
-    %%   Scheduler2 ! {explore, TransferableState},
-    %%   NewBusy = [Scheduler2],
-    %%   NewIdle = [Scheduler1],
+    {stop, Pid} ->
+      %%SchedulingEnd = erlang:monotonic_time(),
+      report_stats(BusyTimes, SchedulingStart, SchedulingEnd),
+      Pid ! done
+  end;
+controller_loop(Status) ->
+  #controller_status{
+     busy_times = BusyTimes,
+     busy = Busy,
+     idle = Idle
+    } = Status,
+  receive
+    {request_idle, Scheduler} ->
+      true = lists:member(Scheduler, Busy),
+      {NewIdle, NewBusy, NewBusyTimes} =
+        case Idle of
+          [] ->
+            Scheduler ! no_idle_schedulers,
+            {Idle, Busy, BusyTimes};
+          [IdleScheduler|Rest] ->
+            Scheduler ! {scheduler, IdleScheduler},
+            PeriodStart = erlang:monotonic_time(),
+            Fun = 
+              fun({SchedId, undefined, Acc}) ->
+                  {SchedId, PeriodStart, Acc}
+              end,
+            NewTimes = maps:update_with(IdleScheduler, Fun, BusyTimes),
+            {Rest, [IdleScheduler|Busy], NewTimes}
+        end,
+      controller_loop(Status#controller_status{
+                        busy_times = NewBusyTimes, 
+                        busy = NewBusy, 
+                        idle = NewIdle
+                       });
+    %% {has_more, Scheduler, TransferableState} ->
+    %%   true = lists:member(Scheduler, Busy),
+    %%   _TempBusy = lists:delete(Scheduler, Busy),
+    %%   TempIdle = [Scheduler|Idle],
+    %%   States =
+    %%     concuerror_scheduler:distribute_interleavings(TransferableState, length(TempIdle)),
+    %%   %% {NewIdle, NewBusy} = start_schedulers(States, TempIdle, TempBusy),
+    %%   [Other] = Idle,
+    %%   [H1,H2] = States,
+    %%   Scheduler ! {explore, non_stop, H1},
+    %%   Other ! {explore, non_stop, H2},
+    %%   NewIdle = [],
+    %%   NewBusy = [Scheduler, Other],
     %%   controller_loop(Schedulers, NewIdle, NewBusy);
-    %% {done, Scheduler1} ->
-    %%   NewBusy1 = lists:delete(Scheduler1, _Busy),
-    %%   receive
-    %%     {done, Scheduler2} ->
-    %%       NewBusy2 = lists:delete(Scheduler2, NewBusy1),
-    %%       receive
-    %%         {done, Scheduler3} ->
-    %%           [Scheduler3] = NewBusy2,
-    %%           io:fwrite("~nScheduler1:~n~w~nScheduler2:~n~w~nScheduler3:~n~w~n~n", [{Scheduler1, node(Scheduler1)}, {Scheduler2, node(Scheduler2)}, {Scheduler3, node(Scheduler3)}]),
-    %%           Scheduler1 ! finish,
-    %%           Scheduler2 ! finish,
-    %%           Scheduler3 ! finish
-    %%       end
-    %%   end,
-    %%   controller_loop(Schedulers, [], []);
-    %% {Pid, finish} ->
-    %%   Pid ! done
-    %% {done, Scheduler1} ->
-    %%   [Scheduler1] = _Busy,
-    %%   [Scheduler2] = _Idle,
-    %%   Scheduler1 ! finish,
-    %%   Scheduler2 ! finish,
-    %%   get_exit_status(Schedulers)
-    %% {state, Scheduler1, State1} ->
-    %%   [Scheduler2] = lists:delete(Scheduler1, Schedulers),
-    %%   State2 = 
-    %%     receive 
-    %%       {state, Scheduler2, St2} ->
-    %%         St2
-    %%     end,
-    %%   Scheduler1 ! {show_exit, {Scheduler1, State1,Scheduler2, State2}};
-    %% {change_scheduler, ChangedState, Source} ->
-    %%   [Target] = lists:delete(Source, Schedulers),
-    %%   receive
-    %%     {change_scheduler, ChangedState2, Target} ->
-    %%       Target ! ChangedState,
-    %%       Source ! ChangedState2
-    %%   end;
-    %% {procs, Scheduler1, State1} ->
-    %%   [Scheduler2] = lists:delete(Scheduler1, Schedulers),
-    %%   State2 = 
-    %%     receive 
-    %%       {procs, Scheduler2, St2} ->
-    %%         St2
-    %%     end,
-    %%   Scheduler1 ! {show_exit, format_(Scheduler1, State1,Scheduler2, State2)};
-    %% exit ->
-    %%    ok
+    {done, Scheduler} ->
+      PeriodEnd = erlang:monotonic_time(),
+      NewBusy = lists:delete(Scheduler, Busy),
+      NewIdle = [Scheduler|Idle],
+      Fun =
+        fun({SchedId, PeriodStart, Acc}) ->
+            {SchedId, undefined, Acc + PeriodEnd - PeriodStart} 
+        end,
+      NewTimes = maps:update_with(Scheduler, Fun, BusyTimes),
+      controller_loop(Status#controller_status{
+                        busy_times = NewTimes,
+                        busy = NewBusy, 
+                        idle = NewIdle})
   end.
 
 distribute_interleavings(Trace, 0) ->
@@ -141,28 +138,42 @@ distribute_interleavings(Trace, _AvailableSchedulers) ->
   exit(traceprint).
 
 start_schedulers([], NewIdle, NewBusy) -> {NewIdle, NewBusy};
-start_schedulers([State|RestStates], [Scheduler|RestSchedules], Busy) ->
+start_schedulers([State|RestStates], [Scheduler|RestSchedulers], Busy) ->
   Scheduler ! {explore, State},
-  start_schedulers(RestStates, RestSchedules, [Scheduler|Busy]).
-  
+  start_schedulers(RestStates, RestSchedulers, [Scheduler|Busy]).
 
-%% format_(Scheduler1, [State1], Scheduler2, [State2]) ->
-%%   Sort = fun(A, B) -> element(1,A) < element(1,B) end,
-%%   L1 = lists:sort(Sort, State1),
-%%   L2 = lists:sort(Sort, State2),
-%%   {Scheduler1, Scheduler2, format_aux(L1,L2)}.
-
-%% format_aux([],[]) ->
-%%   [];
-%% format_aux([H1|T1], [H2|T2]) ->
-%%   [{H1, "--------------", H2, "||||||||||||||||||||||||||||||||||||||||||||"}|format_aux(T1,T2)].
-      
 %%------------------------------------------------------------------------------
 
 -spec stop(pid()) -> ok.
 
 stop(Controller) ->
-  Controller ! {finish, self()},
+  Controller ! {stop, self()},
   receive
     done -> ok
   end.
+
+%%------------------------------------------------------------------------------
+
+-spec report_stats(maps:map(), integer(), integer()) -> ok.
+
+report_stats(BusyTimes, Start, End) ->
+  %% TODO modify this to be reported through the Logger
+  Timediff = erlang:convert_time_unit(End - Start, native, milli_seconds),
+  Minutes = Timediff div 60000,
+  Seconds = Timediff rem 60000 / 1000,
+  io:fwrite("Scheduling Time: ~wm~.3fs~n", [Minutes, Seconds]),
+  Fun =
+    fun(A,B) ->
+        {_,{IdA,_,_}} = A,
+        {_,{IdB,_,_}} = B,
+        IdA =< IdB
+    end,
+  report_utilization(lists:sort(Fun, maps:to_list(BusyTimes)), End - Start).
+
+report_utilization([], _) ->
+  ok;
+report_utilization([{_,{SchedulerId, undefined, RunningTime}}|Rest],
+                   TotalRunningTime) ->
+  Utilization = RunningTime / TotalRunningTime * 100,
+  io:fwrite("Scheduler ~w: ~.2f% Utilization~n", [SchedulerId, Utilization]),
+  report_utilization(Rest, TotalRunningTime).

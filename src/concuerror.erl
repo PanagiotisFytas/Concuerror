@@ -125,7 +125,7 @@ start_parallel(RawOptions, OldOptions) ->
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
   CombinedStatus = get_combined_status(SchedulerWrappers),
   ExitStatus = concuerror_logger:stop(LoggerWrapper, CombinedStatus),
-  %% ok = concuerror_controller:stop(Controller),
+  ok = concuerror_controller:stop(Controller),
   concuerror_process_spawner:stop(ProcessSpawner),
   ok = concuerror_nodes:clear(Nodes),
   ExitStatus.
@@ -157,7 +157,9 @@ get_combined_status(SchedulerWrappers, Status) ->
           normal ->
             ExitStatus;
           false ->
-            Status
+            Status;
+          _ ->
+            exit(Status)
         end,
       get_combined_status(Rest, NewStatus)
   end.

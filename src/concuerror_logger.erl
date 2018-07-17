@@ -89,7 +89,8 @@ timediff(After, Before) ->
 %%          controller       :: pid(),
           jobs             :: queue:queue(),
           logger           :: pid(),
-          total_schedulers :: pos_integer()
+          total_schedulers :: pos_integer(),
+          schedulers       :: maps:map()
          }).
 
 %%------------------------------------------------------------------------------
@@ -1176,7 +1177,8 @@ initialize_wrapper(Options, Logger) ->
 %%     controller = ?opt(controller, Options),
      jobs = queue:new(),
      logger = Logger,
-     total_schedulers = ?number_of_schedulers
+     total_schedulers = ?number_of_schedulers,
+     schedulers = maps:from_list(lists:zip(Nodes, lists:seq(1, length(Nodes))))
     }. 
 
 %% wrapper_loop(Logger, LoggerStatus, Queues, Jobs) 
@@ -1188,6 +1190,20 @@ wrapper_loop(State)  ->
      logger = Logger
     } = State,
   receive
+    {complete, Warn, Scheduler, Ref} ->
+      Scheduler ! Ref, %% complete is a synchronus call to the logger
+      Node = node(Scheduler),
+      LogQueue = maps:get(Node, LoggerCalls),
+      CompleteLogQueue = queue:in({complete, Warn, self(), Ref}, LogQueue),
+      {MaybeUpdatedCurrentJob, MaybeUpdatedJobs} =
+        schedule_log_job(State, Ref, CompleteLogQueue),
+      UpdatedState =
+        State#wrapper_state{
+          jobs = MaybeUpdatedJobs,
+          current_job = MaybeUpdatedCurrentJob,
+          calls_to_logger = maps:update(Node, queue:new(), LoggerCalls)
+         },
+      wrapper_loop(UpdatedState);
     Ref when Ref =:= CurrentJob ->
       {Head, JobsLeft} = queue:out(Jobs),
       NewLoggerJob = 
@@ -1205,58 +1221,63 @@ wrapper_loop(State)  ->
           current_job = NewLoggerJob
          },
       wrapper_loop(UpdatedState);
-    {complete, Warn, Scheduler, Ref} ->
-      Scheduler ! Ref, %% complete is a synchronus call to the logger
-      Node = node(Scheduler),
-      LogQueue = maps:get(Node, LoggerCalls),
-      CompleteLogQueue = queue:in({complete, Warn, self(), Ref}, LogQueue),
-      LogFun =  fun() -> log_queue(Logger, self(), Ref, CompleteLogQueue) end,
-      LogJob = {Ref, LogFun},
-      {MaybeUpdatedCurrentJob, MaybeUpdatedJobs} = 
-      case CurrentJob of
-        none ->
-          _ = spawn_link(LogFun),
-          true = queue:is_empty(Jobs),
-          {Ref, Jobs};
-        CurrentJobRef when is_reference(CurrentJobRef) ->
-          {CurrentJobRef, queue:in(LogJob, Jobs)}
-        end,
-      UpdatedState =
-        State#wrapper_state{
-          jobs = MaybeUpdatedJobs,
-          current_job = MaybeUpdatedCurrentJob,
-          calls_to_logger = maps:update(Node, queue:new(), LoggerCalls)
-         },
-      wrapper_loop(UpdatedState);
     {stop, CombinedStatus, ControllerParent} ->
       %% makes sure that logger is empty
-      ok = finish_up(CurrentJob, Jobs),
+      finish_scheduled_jobs(CurrentJob, Jobs),
+      log_incomplete_jobs(Logger, maps:values(LoggerCalls)),
       SchedulerStatus = concuerror:get_scheduler_status(CombinedStatus, Logger),
       ExitStatus = stop(Logger, SchedulerStatus),
       ControllerParent ! {stopped, ExitStatus};
-    OtherLogRequest ->
+    LogRequest ->
       %% Asyncronus request
-      RequestList = tuple_to_list(OtherLogRequest),
+      RequestList = tuple_to_list(LogRequest),
       Scheduler = lists:last(RequestList),
       Node = node(Scheduler),
+      MaybeModifyLogRequest =
+        case LogRequest of
+          {time, Tag, Scheduler} ->
+            #wrapper_state{schedulers = SchedulerNumbers} = State,
+            FixedTag = io_lib:format("Scheduler ~w: ~s", [maps:get(Node, SchedulerNumbers), Tag]),
+            {time, FixedTag, Scheduler};
+          OtherLogRequest ->
+            OtherLogRequest
+        end,
       LogQueue = maps:get(Node, LoggerCalls),
-      UpdatedLogQueue = queue:in(OtherLogRequest, LogQueue),
+      UpdatedLogQueue = queue:in(MaybeModifyLogRequest, LogQueue),
       UpdatedLoggerCalls = maps:update(Node, UpdatedLogQueue, LoggerCalls),
       UpdatedState = State#wrapper_state{calls_to_logger = UpdatedLoggerCalls},
       wrapper_loop(UpdatedState)
   end.
 
+schedule_log_job(State, Ref, LogQueue) ->
+  #wrapper_state{
+     current_job = CurrentJob,
+     jobs = Jobs,
+     logger = Logger
+    } = State,
+  LogFun =  fun() -> log_queue(Logger, self(), Ref, LogQueue) end,
+  LogJob = {Ref, LogFun},
+  case CurrentJob of
+    none ->
+      _ = spawn_link(LogFun),
+      true = queue:is_empty(Jobs),
+      {Ref, Jobs};
+    CurrentJobRef when is_reference(CurrentJobRef) ->
+      {CurrentJobRef, queue:in(LogJob, Jobs)}
+   end.
+
 log_queue(Logger, Wrapper, Ref, CompleteLogQueue) ->
+  true = is_reference(Ref), %% TODO remove this
   _ = [Logger ! Call || Call <- queue:to_list(CompleteLogQueue)],
   receive
     Ref ->
       Wrapper ! Ref
   end.
 
-finish_up(none, JobsLeft) ->
+finish_scheduled_jobs(none, JobsLeft) ->
   true = queue:is_empty(JobsLeft),
   ok;
-finish_up(CurrentJob, Jobs) ->
+finish_scheduled_jobs(CurrentJob, Jobs) ->
   receive
     Ref when Ref =:= CurrentJob ->
       {Head, JobsLeft} = queue:out(Jobs),
@@ -1269,8 +1290,13 @@ finish_up(CurrentJob, Jobs) ->
           empty ->
             none
         end,
-      finish_up(NewLoggerJob, JobsLeft)
+      finish_scheduled_jobs(NewLoggerJob, JobsLeft)
   end.
+
+log_incomplete_jobs(_, []) -> ok;
+log_incomplete_jobs(Logger, [IncompleteQueue|Rest]) ->
+  _ = [Logger ! Call || Call <- queue:to_list(IncompleteQueue)],
+  log_incomplete_jobs(Logger, Rest).
 
 %%------------------------------------------------------------------------------
 
@@ -1296,6 +1322,3 @@ fix_message({graph, {race, EarlyRef, Ref}, _}) ->
   {graph, {race, EarlyRef, Ref}};
 fix_message(Message) ->
   Message.
-
-
-
