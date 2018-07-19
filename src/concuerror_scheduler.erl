@@ -151,7 +151,7 @@
           use_unsound_bpor             :: boolean(),
           controller                   :: pid() | undefined,
           parallel                     :: boolean(),
-          replay_mode                  :: undefined | pseudo | actual,
+          replay_mode = pseudo         :: pseudo | actual,
           scheduler_number = undefined :: pos_integer() | undefined
           %% TODO check if replay_mode is needed 
          }).
@@ -320,7 +320,7 @@ explore_scheduling(State) ->
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
   case HasMore of
     true -> explore_scheduling(NewState);
-    false -> ok
+    false -> exit(UpdatedState) %% TODO put ok
   end.
 
 explore_scheduling_parallel(State) ->
@@ -333,7 +333,7 @@ explore_scheduling_parallel(State) ->
     true ->
       %% concuerror_callback:reset_processes(State#scheduler_state.processes),
       LoadBalancedState = unload_work(NewState),
-      explore_scheduling_parallel(LoadBalancedState);
+      explore_scheduling_parallel(LoadBalancedState#scheduler_state{replay_mode = pseudo});
     false ->
       %% concuerror_callback:reset_processes(State#scheduler_state.processes),
       Controller ! {done, self()}
@@ -405,7 +405,8 @@ unload_work(State) ->
             NewState = State#scheduler_state{trace = MyTrace},
             unload_work(NewState)
         end
-    end.
+    end,
+  LoadBalancedState.
 
 %%------------------------------------------------------------------------------
 
@@ -1834,7 +1835,7 @@ replay_prefix(Trace, State) ->
   NewState = State#scheduler_state{last_scheduled = FirstProcess},
   replay_prefix_aux(lists:reverse(Trace), NewState).
 
-replay_prefix_aux([_Woot], State) ->
+replay_prefix_aux([_], State) ->
   %% TODO : 
   %% when another interleaving is replayed the old interleaving (more correctly
   %% the traces of the first inteleaving that are always before a backtrack)
@@ -1858,10 +1859,10 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
     } = State,
   ?debug(_Logger, "~s~n", [?pretty_s(I, Event)]),
   {ok, #event{actor = Actor} = NewEvent} =
-    case ReplayMode =:= actual of 
-      false ->
+    case ReplayMode of 
+      pseudo ->
         get_next_event_backend(Event, State);
-      true ->
+      actual ->
         get_next_event_backend(Event#event{event_info = undefined}, State)
     end,
   try
@@ -1887,8 +1888,8 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
   NewState = State#scheduler_state{last_scheduled = NewLastScheduled},
   replay_prefix_aux(Rest, maybe_log(Event, NewState, I)).
 
-logically_equal(#scheduler_state{replay_mode = ReplayMode}, _, _)
-  when ReplayMode =:= pseudo ->
+logically_equal(#scheduler_state{parallel = Parallel}, _, _)
+  when Parallel =:= false ->
   false;
 logically_equal(_,
                 #event{event_info = EventInfo} = Event,
