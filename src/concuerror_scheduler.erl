@@ -2299,12 +2299,33 @@ remove_not_owned([TraceStateToBeFixed|RestToBeFixed], [TraceState|Rest], FixedFr
     true ->
       remove_not_owned(RestToBeFixed, Rest, [FixedTraceState|FixedFragmentPrefix]);      
     false ->
+      %% !!!!!!!
+      %% This is just a heuristic, not sure if it is even sound
+      %% !!!!!!!
+      %% TODO make sure whether this holds or not
+      RestFixed =
+      case exists(EventToBeFixed, Done) of
+        false ->
+          Rest;
+        true ->
+          remove_all_not_owned(Rest)
+      end,
+      %% !!!!!!!
       %% TODO check if there is something additional I can remove here
       %% 1 2 3 vs 1 2 3' => claim ownership of backtrack underneath
       %% probably this only works as a heuristic
       %% TODO figure out if this is the correct course of action here
       lists:reverse([FixedTraceState|Rest]) ++ FixedFragmentPrefix
   end.
+
+remove_all_not_owned([]) ->
+  [];
+remove_all_not_owned([#trace_state_transferable{ownership = true} = TraceState|Rest]) ->
+  [TraceState|Rest];
+remove_all_not_owned([#trace_state_transferable{wakeup_tree = WuT} = TraceState|Rest]) ->
+  FixedWuT = [Entry || Entry <- WuT, Entry#backtrack_entry_transferable.ownership],
+  FixedTraceState = TraceState#trace_state_transferable{wakeup_tree = FixedWuT},
+  [FixedTraceState|remove_all_not_owned(Rest)].
 
 remove_not_owned_wut(WuTToBeFixed, WuT, Done) ->
   remove_not_owned_wut(WuTToBeFixed, WuT, Done, [], []).
