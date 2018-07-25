@@ -7,10 +7,11 @@
 -include("concuerror.hrl").
 
 -record(controller_status, {
-          busy_times       :: maps:map(),
-          busy             :: [pid()],
-          idle             :: [pid()],
-          scheduling_start :: integer()
+          schedulers_uptime :: maps:map(),
+          busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
+          idle              :: [pid()],
+          idle_frontier     :: [concuerror_scheduler:reduced_scheduler_state()],
+          scheduling_start  :: integer()
          }).
 %%------------------------------------------------------------------------------
 
@@ -25,42 +26,56 @@ start(Nodes) ->
 
 initialize_controller(Nodes) ->
   N = length(Nodes),
-  Schedulers = get_schedulers(N, N),
-  SchedulerPids = [Pid || {Pid, _} <- Schedulers],
-  [InitialScheduler|Rest] = SchedulerPids,
-  InitialScheduler ! start,
-  SchedulingStart = erlang:monotonic_time(),
-  Busy = [InitialScheduler],
-  Idle = Rest,
-  InitTimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
+  SchedulerNumbers = maps:from_list(lists:zip(Nodes, lists:seq(1, length(Nodes)))),
+  UnsortedSchedulers = get_schedulers(N, SchedulerNumbers),
   Fun =
-    fun({SchedId, undefined, 0}) ->
-        {SchedId, SchedulingStart, 0}
+    fun({_, IdA}, {_, IdB}) ->
+        IdA < IdB
     end,
-  BusyTimes = maps:update_with(InitialScheduler, Fun, InitTimes),
+  Schedulers = lists:sort(Fun, UnsortedSchedulers),
+  SchedulerPids = [Pid || {Pid, _} <- Schedulers],
+  [InitialScheduler|_Rest] = SchedulerPids,
+  InitialScheduler ! {start, ?budget / N},
+  SchedulingStart = erlang:monotonic_time(),
+  InitUptimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
+  Uptimes = update_scheduler_started(InitialScheduler, InitUptimes),
+  IdleFrontier =
+    receive
+      {budget_exceeded, InitialScheduler, NewFragment} ->
+        [NewFragment];
+      {done, InitialScheduler} ->
+        []
+    end,
+  NewUptimes = update_scheduler_stopped(InitialScheduler, Uptimes),
+  Busy = [],
+  Idle = SchedulerPids,
   InitialStatus =
     #controller_status{
-       busy_times = BusyTimes,
+       schedulers_uptime = NewUptimes,
        busy = Busy,
        idle = Idle,
+       idle_frontier = IdleFrontier,
        scheduling_start = SchedulingStart
       },
   controller_loop(InitialStatus).
  
 get_schedulers(0, _) -> [];
-get_schedulers(I, N) ->
+get_schedulers(N, SchedulerNumbers) ->
   receive
     {scheduler, Pid} ->
-      SchedulerId = N-I+1,
-      Pid ! {scheduler_number, N-I+1},
-      [{Pid, SchedulerId} | get_schedulers(I-1, N)]
+      SchedulerId = maps:get(node(Pid), SchedulerNumbers),
+      Pid ! {scheduler_number, SchedulerId},
+      [{Pid, SchedulerId} | get_schedulers(N-1, SchedulerNumbers)]
   end.
 
-controller_loop(#controller_status{busy = Busy} = Status)
-  when Busy =:= [] ->
+controller_loop(#controller_status{
+                   busy = Busy,
+                   idle_frontier = IdleFrontier
+                  } = Status)
+  when IdleFrontier =:= [] andalso Busy =:= [] ->
   SchedulingEnd = erlang:monotonic_time(),
   #controller_status{
-     busy_times = BusyTimes,
+     schedulers_uptime = Uptimes,
      idle = Idle,
      scheduling_start = SchedulingStart
     } = Status,
@@ -69,78 +84,129 @@ controller_loop(#controller_status{busy = Busy} = Status)
   receive
     {stop, Pid} ->
       %%SchedulingEnd = erlang:monotonic_time(),
-      report_stats(BusyTimes, SchedulingStart, SchedulingEnd),
+      report_stats(Uptimes, SchedulingStart, SchedulingEnd),
       Pid ! done
   end;
 controller_loop(Status) ->
   #controller_status{
-     busy_times = BusyTimes,
      busy = Busy,
-     idle = Idle
+     %% idle = Idle,
+     idle_frontier = IdleFrontier
+    } = Status,
+  NewIdleFrontier = partition(IdleFrontier, ?fragmentation_val - length(Busy)),
+  NewStatus = assign_work(Status#controller_status{idle_frontier = NewIdleFrontier}),
+  wait_scheduler_response(NewStatus).
+
+wait_scheduler_response(Status) ->
+  #controller_status{
+     schedulers_uptime = Uptimes,
+     busy = Busy,
+     idle = Idle,
+     idle_frontier = IdleFrontier
     } = Status,
   receive
-    {request_idle, Scheduler} ->
-      true = lists:member(Scheduler, Busy),
-      {NewIdle, NewBusy, NewBusyTimes} =
-        case Idle of
-          [] ->
-            Scheduler ! no_idle_schedulers,
-            {Idle, Busy, BusyTimes};
-          [IdleScheduler|Rest] ->
-            Scheduler ! {scheduler, IdleScheduler},
-            PeriodStart = erlang:monotonic_time(),
-            Fun = 
-              fun({SchedId, undefined, Acc}) ->
-                  {SchedId, PeriodStart, Acc}
-              end,
-            NewTimes = maps:update_with(IdleScheduler, Fun, BusyTimes),
-            {Rest, [IdleScheduler|Busy], NewTimes}
-        end,
+    {claim_ownership, Scheduler, TransferableState} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
+      {Scheduler, _UnexploredFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      NewIdle = [Scheduler|Idle],
+      BusyFrontier = [Fragment || {_, Fragment} <- NewBusy],
+      NewIdleFragment =
+        concuerror_scheduler:fix_ownership(TransferableState, IdleFrontier, BusyFrontier),
+      NewIdleFrontier = [NewIdleFragment|IdleFrontier],
       controller_loop(Status#controller_status{
-                        busy_times = NewBusyTimes, 
+                        schedulers_uptime = NewUptimes,
+                        busy = NewBusy, 
+                        idle = NewIdle,
+                        idle_frontier = NewIdleFrontier
+                       });
+    {budget_exceeded, Scheduler, TransferableState} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
+      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      NewIdle = [Scheduler|Idle],
+      BusyFrontier = [Fragment || {_, Fragment} <- NewBusy],
+      NewIdleFragment =
+        concuerror_scheduler:fix_ownership(TransferableState, IdleFrontier, BusyFrontier),
+      NewIdleFrontier = [NewIdleFragment|IdleFrontier],
+      controller_loop(Status#controller_status{
+                        schedulers_uptime = NewUptimes,
+                        busy = NewBusy, 
+                        idle = NewIdle,
+                        idle_frontier = NewIdleFrontier
+                       });
+    {done, Scheduler} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
+      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      %% TODO I must figure out what do with this fragments that holds the
+      %% backtack (i.e the nodes that has been explored by that scheduler
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      %% TODO figure out what to do with the fragment of that scheduler,
+      %% its trace holds info about node ownership probably S.O.S.
+      %% Probably a master tree is needed that holds all this info
+      %% and gets cut down maybe by the #scheduler_state.done.
+      %% Most probably i will have to look at the backtrack of the
+      %% fragment and use this to update a master tree with the nodes
+      %% that have been explored by it 
+      NewIdle = [Scheduler|Idle],
+      controller_loop(Status#controller_status{
+                        schedulers_uptime = NewUptimes,
                         busy = NewBusy, 
                         idle = NewIdle
-                       });
-    %% {has_more, Scheduler, TransferableState} ->
-    %%   true = lists:member(Scheduler, Busy),
-    %%   _TempBusy = lists:delete(Scheduler, Busy),
-    %%   TempIdle = [Scheduler|Idle],
-    %%   States =
-    %%     concuerror_scheduler:distribute_interleavings(TransferableState, length(TempIdle)),
-    %%   %% {NewIdle, NewBusy} = start_schedulers(States, TempIdle, TempBusy),
-    %%   [Other] = Idle,
-    %%   [H1,H2] = States,
-    %%   Scheduler ! {explore, non_stop, H1},
-    %%   Other ! {explore, non_stop, H2},
-    %%   NewIdle = [],
-    %%   NewBusy = [Scheduler, Other],
-    %%   controller_loop(Schedulers, NewIdle, NewBusy);
-    {done, Scheduler} ->
-      PeriodEnd = erlang:monotonic_time(),
-      NewBusy = lists:delete(Scheduler, Busy),
-      NewIdle = [Scheduler|Idle],
-      Fun =
-        fun({SchedId, PeriodStart, Acc}) ->
-            {SchedId, undefined, Acc + PeriodEnd - PeriodStart} 
-        end,
-      NewTimes = maps:update_with(Scheduler, Fun, BusyTimes),
-      controller_loop(Status#controller_status{
-                        busy_times = NewTimes,
-                        busy = NewBusy, 
-                        idle = NewIdle})
+                       })
   end.
-
-distribute_interleavings(Trace, 0) ->
-  Trace;
-distribute_interleavings(Trace, _AvailableSchedulers) ->
-  %exit(Trace).
-  io:fwrite("~n~n~p~n~n", [Trace]),
-  exit(traceprint).
 
 start_schedulers([], NewIdle, NewBusy) -> {NewIdle, NewBusy};
 start_schedulers([State|RestStates], [Scheduler|RestSchedulers], Busy) ->
   Scheduler ! {explore, State},
   start_schedulers(RestStates, RestSchedulers, [Scheduler|Busy]).
+
+assign_work(#controller_status{
+               idle = Idle,
+               idle_frontier = IdleFrontier
+              } = Status)
+  when Idle =:= [] orelse IdleFrontier =:= []->
+  Status;
+assign_work(Status) ->
+  #controller_status{
+     busy = Busy,
+     schedulers_uptime = Uptimes,
+     idle = [Scheduler|RestIdle],
+     idle_frontier = [Fragment|RestIdleFrontier]
+    } = Status,
+  Scheduler ! {explore, Fragment, ?budget/length([Scheduler|RestIdle])},
+  NewUptimes = update_scheduler_started(Scheduler, Uptimes),
+  UpdatedStatus =
+    Status#controller_status{
+      busy = [{Scheduler, Fragment}|Busy],
+      schedulers_uptime = NewUptimes,
+      idle = RestIdle,
+      idle_frontier = RestIdleFrontier
+     },
+  assign_work(UpdatedStatus).
+  
+%%------------------------------------------------------------------------------
+
+partition(Frontier, N) ->
+  %% it should be N =:= ?fragmentation_val - #of active fragments
+  %% need to fix the number to account for active fragments
+  AdditionalFragmentsNeeded = N - length(Frontier),
+  partition_aux(Frontier, AdditionalFragmentsNeeded, []).
+
+%% TODO figure out if it matter whether I put new fragments in
+%% the begining or not
+partition_aux([], N, Frontier) when N =/= 0 ->
+  %% The frontier cannot be further partitioned (probably).
+  Frontier;
+partition_aux(Frontier, 0, PartitionedFrontier) ->
+  %% when length(Frontier) + length(PartitionedFrontier) = N ->
+  Frontier ++ PartitionedFrontier;
+partition_aux([Fragment|Rest], FragmentsNeeded, PartitionedFrontier) ->
+  true = FragmentsNeeded > 0,
+  {UpdatedFragment, NewFragments, FragmentsGotten} =
+    concuerror_scheduler:distribute_interleavings(Fragment, FragmentsNeeded),
+  NewPartitionedFrontier = NewFragments ++ [UpdatedFragment|PartitionedFrontier],
+  partition_aux(Rest, FragmentsNeeded - FragmentsGotten, NewPartitionedFrontier).
 
 %%------------------------------------------------------------------------------
 
@@ -154,9 +220,26 @@ stop(Controller) ->
 
 %%------------------------------------------------------------------------------
 
+update_scheduler_started(Scheduler, Uptimes) ->
+  PeriodStart = erlang:monotonic_time(),
+  Fun =
+    fun({SchedId, undefined, Acc}) ->
+        {SchedId, PeriodStart, Acc}
+    end,
+  maps:update_with(Scheduler, Fun, Uptimes).
+
+
+update_scheduler_stopped(Scheduler, Uptimes) ->
+  PeriodEnd = erlang:monotonic_time(),
+  Fun =
+    fun({SchedId, PeriodStart, Acc}) ->
+        {SchedId, undefined, Acc + PeriodEnd - PeriodStart} 
+    end,
+  maps:update_with(Scheduler, Fun, Uptimes).
+
 -spec report_stats(maps:map(), integer(), integer()) -> ok.
 
-report_stats(BusyTimes, Start, End) ->
+report_stats(Uptimes, Start, End) ->
   %% TODO modify this to be reported through the Logger
   Timediff = erlang:convert_time_unit(End - Start, native, milli_seconds),
   Minutes = Timediff div 60000,
@@ -168,7 +251,7 @@ report_stats(BusyTimes, Start, End) ->
         {_,{IdB,_,_}} = B,
         IdA =< IdB
     end,
-  report_utilization(lists:sort(Fun, maps:to_list(BusyTimes)), End - Start).
+  report_utilization(lists:sort(Fun, maps:to_list(Uptimes)), End - Start).
 
 report_utilization([], _) ->
   ok;

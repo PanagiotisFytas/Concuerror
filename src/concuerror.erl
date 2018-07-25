@@ -52,7 +52,8 @@ start(Options, LogMsgs) ->
   Logger =
     case Parallel of 
       false ->
-        concuerror_logger:start(LoggerOptions);
+        %% concuerror_logger:start(LoggerOptions);
+        concuerror_logger:start_wrapper([{nodes, [node()]}|LoggerOptions]);
       true ->
         ?opt(logger_wrapper, Options)
     end,
@@ -68,15 +69,18 @@ start(Options, LogMsgs) ->
         [{logger, Logger}
          | LoggerOptions]
     end,
+  _StartTime = erlang:monotonic_time(),
   {Pid, Ref} =
     spawn_monitor(concuerror_scheduler, run, [SchedulerOptions]),
   Reason = receive {'DOWN', Ref, process, Pid, R} -> R end,
+  _EndTime = erlang:monotonic_time(),
   ExitStatus =
     case Parallel of
       false ->
         concuerror_process_spawner:stop(?opt(process_spawner, SchedulerOptions)),        
         SchedulerStatus = get_scheduler_status(Reason, Logger),
-        concuerror_logger:stop(Logger, SchedulerStatus);
+        concuerror_logger:stop(Logger, SchedulerStatus),
+        concuerror_controller:report_stats(maps:new(), _StartTime, _EndTime);
       true ->
         Reason
     end,
