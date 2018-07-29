@@ -187,7 +187,7 @@
 -define(balancing_limit, 1).
 -define(fragmentation_val, 2*?number_of_schedulers).
 -define(time_unit, milli_seconds).
--define(budget, 5000).
+-define(budget, 10).
 
 -ifdef(BEFORE_OTP_17).
 -define(to_list(Dict), dict:to_list(Dict)).

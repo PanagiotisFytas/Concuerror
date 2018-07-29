@@ -7,6 +7,7 @@
 -include("concuerror.hrl").
 
 -record(controller_status, {
+          execution_tree    :: concuerror_scheduler:execution_tree(),
           schedulers_uptime :: maps:map(),
           busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
           idle              :: [pid()],
@@ -39,12 +40,12 @@ initialize_controller(Nodes) ->
   SchedulingStart = erlang:monotonic_time(),
   InitUptimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
   Uptimes = update_scheduler_started(InitialScheduler, InitUptimes),
-  IdleFrontier =
+  {IdleFrontier, ExecutionTree} =
     receive
       {budget_exceeded, InitialScheduler, NewFragment} ->
-        [NewFragment];
+        {[NewFragment], concuerror_scheduler:initialize_execution_tree(NewFragment)};
       {done, InitialScheduler} ->
-        []
+        {[], empty}
     end,
   NewUptimes = update_scheduler_stopped(InitialScheduler, Uptimes),
   Busy = [],
@@ -53,6 +54,7 @@ initialize_controller(Nodes) ->
     #controller_status{
        schedulers_uptime = NewUptimes,
        busy = Busy,
+       execution_tree = ExecutionTree,
        idle = Idle,
        idle_frontier = IdleFrontier,
        scheduling_start = SchedulingStart
@@ -74,6 +76,8 @@ controller_loop(#controller_status{
                   } = Status)
   when IdleFrontier =:= [] andalso Busy =:= [] ->
   SchedulingEnd = erlang:monotonic_time(),
+  %% TODO : remove this check
+  empty = Status#controller_status.execution_tree,
   #controller_status{
      schedulers_uptime = Uptimes,
      idle = Idle,
@@ -101,43 +105,44 @@ wait_scheduler_response(Status) ->
   #controller_status{
      schedulers_uptime = Uptimes,
      busy = Busy,
+     execution_tree = ExecutionTree,
      idle = Idle,
      idle_frontier = IdleFrontier
     } = Status,
   receive
-    {claim_ownership, Scheduler, TransferableState} ->
+    {claim_ownership, Scheduler, Fragment} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
-      {Scheduler, _UnexploredFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
+      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
-      BusyFrontier = [Fragment || {_, Fragment} <- NewBusy],
-      NewIdleFragment =
-        concuerror_scheduler:fix_ownership(TransferableState, IdleFrontier, BusyFrontier),
+      {NewIdleFragment, NewExecutionTree} =
+        concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree),
       NewIdleFrontier = [NewIdleFragment|IdleFrontier],
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
-                        busy = NewBusy, 
+                        busy = NewBusy,
+                        execution_tree = NewExecutionTree,
                         idle = NewIdle,
                         idle_frontier = NewIdleFrontier
                        });
-    {budget_exceeded, Scheduler, TransferableState} ->
+    {budget_exceeded, Scheduler, Fragment} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
-      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
-      BusyFrontier = [Fragment || {_, Fragment} <- NewBusy],
-      NewIdleFragment =
-        concuerror_scheduler:fix_ownership(TransferableState, IdleFrontier, BusyFrontier),
+      {NewIdleFragment, NewExecutionTree} =
+        concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree),
       NewIdleFrontier = [NewIdleFragment|IdleFrontier],
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
-                        busy = NewBusy, 
+                        busy = NewBusy,
+                        execution_tree = NewExecutionTree,
                         idle = NewIdle,
                         idle_frontier = NewIdleFrontier
                        });
     {done, Scheduler} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
-      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
       %% TODO I must figure out what do with this fragments that holds the
       %% backtack (i.e the nodes that has been explored by that scheduler
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
@@ -149,9 +154,12 @@ wait_scheduler_response(Status) ->
       %% fragment and use this to update a master tree with the nodes
       %% that have been explored by it 
       NewIdle = [Scheduler|Idle],
+      NewExecutionTree =
+        concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
-                        busy = NewBusy, 
+                        busy = NewBusy,
+                        execution_tree = NewExecutionTree,
                         idle = NewIdle
                        })
   end.

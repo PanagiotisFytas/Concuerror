@@ -46,10 +46,16 @@
                unique_id/0
              ]).
 
--export_type([reduced_scheduler_state/0]).
-
 %% Controller Interface
 -export([distribute_interleavings/2, fix_ownership/3]).
+-export([ initialize_execution_tree/1,
+          update_execution_tree_done/2,
+          update_execution_tree/3
+        ]).
+
+-export_type([reduced_scheduler_state/0,
+              execution_tree/0
+             ]).
 
 %% =============================================================================
 %% DATA STRUCTURES & TYPES
@@ -204,17 +210,27 @@
 %% -type trace_state_transferable() :: #trace_state_transferable{}.
 
 -record(reduced_scheduler_state, {
-          backtrack_size               :: pos_integer(),
-          interleaving_id              :: interleaving_id(),
-          last_scheduled               :: pid(),
-          need_to_replay               :: boolean(),
-          origin                       :: interleaving_id(),
-          trace                        :: [trace_state()]
+          backtrack_size  :: pos_integer(),
+          interleaving_id :: interleaving_id(),
+          last_scheduled  :: pid(),
+          need_to_replay  :: boolean(),
+          origin          :: interleaving_id(),
+          safe            :: boolean(),
+          trace           :: [trace_state()]
          }).
 
 -type reduced_scheduler_state() :: #reduced_scheduler_state{}.
 %% TODO: add what was previous called exploring and warnings 
 
+-record(execution_tree, {
+          active_children         = [] :: [execution_tree()],
+          finished_children       = [] :: [event_transferable()],
+          event                        :: event_transferable(),
+          fragments_acessing_node = 1  :: non_neg_integer(),
+          next_wakeup_tree        = [] :: event_tree_transferable()
+         }).
+
+-type execution_tree() :: #execution_tree{} | empty.
 
 %-------------------------------------------------------------------------------
 
@@ -1964,6 +1980,10 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
 
 %%------------------------------------------------------------------------------
 %%TODO add more event_info types
+
+logically_equal(Event1, Event2) ->
+  logically_equal(#scheduler_state{parallel = true}, Event1, Event2).
+
 logically_equal(#scheduler_state{parallel = Parallel}, _, _)
   when Parallel =:= false ->
   false;
@@ -2145,18 +2165,461 @@ bound_reached(Logger) ->
 %% Controller Interface
 %%------------------------------------------------------------------------------
 
-%% -spec distribute_interleavings(reduced_scheduler_state(), non_neg_integer()) ->
-%%                                   [reduced_scheduler_state()].
+-spec initialize_execution_tree(reduced_scheduler_state()) ->
+                                 execution_tree().
 
-%% distribute_interleavings(TransferableState, AvailableSchedulers) -> 
-%%   #reduced_scheduler_state{trace = Trace} = TransferableState,
-%%   Traces = distribute_interleavings_aux(Trace, AvailableSchedulers, []),
-%%   [TransferableState#reduced_scheduler_state{trace = T} || T <- Traces].
+%% TODO modify in case I need to add sleep sets here
+initialize_execution_tree(#reduced_scheduler_state{trace = Trace} = _Fragment) ->
+  initialize_execution_tree_aux(lists:reverse(Trace)).
 
-%% distribute_interleavings_aux(_, 0, Traces) ->
-%%   Traces;
-%% distribute_interleavings_aux(Trace, N, Traces) ->
-%%   distribute_interleavings_aux(Trace, N-1, [Trace|Traces]).
+initialize_execution_tree_aux([LastTraceState]) ->
+  #trace_state_transferable{
+     done = Done
+    } = LastTraceState,
+  [ActiveEvent|_FinishedEvents] = Done,
+  #execution_tree{
+     event = ActiveEvent
+    };
+initialize_execution_tree_aux([TraceState, NextTraceState|Rest]) ->
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  [ActiveEvent|_FinishedEvents] = Done,
+  #trace_state_transferable{
+     done = NextDone,
+     wakeup_tree = NextWuT
+    } = NextTraceState,
+  [_ActiveChild|FinishedChildren] = NextDone,
+  #execution_tree{
+     active_children = [initialize_execution_tree_aux([NextTraceState|Rest])],
+     finished_children = FinishedChildren,
+     event = ActiveEvent,
+     next_wakeup_tree = NextWuT
+    }.
+
+%%------------------------------------------------------------------------------
+
+print_tree(Prefix, ExecTree) ->
+  #execution_tree{
+     active_children = Children,
+     finished_children = FinishedChildren,
+     event = Event,
+     next_wakeup_tree = WuT
+    } = ExecTree,
+  io:fwrite("~sNode: ~p~n", [Prefix, Event#event_transferable.actor]),
+  [io:fwrite("~sFinishedChild: ~p~n", [Prefix, Ev#event_transferable.actor]) || Ev <- FinishedChildren],
+  [io:fwrite("~sWuT: ~p~n", [Prefix, (En#backtrack_entry_transferable.event)#event_transferable.actor]) || En <- WuT],
+  ChildPrefix = Prefix ++ "---",
+  [print_tree(ChildPrefix, Ch) || Ch <- Children].
+
+print_trace([]) ->
+  ok;
+print_trace([H|T]) ->
+  WuT = H#trace_state_transferable.wakeup_tree,
+  io:fwrite("Actor~p~n",[(lists:nth(1,H#trace_state_transferable.done))#event_transferable.actor]),
+  [io:fwrite("WuT: ~p~n", [(En#backtrack_entry_transferable.event)#event_transferable.actor]) || En <- WuT],
+  print_trace(T).
+
+%%------------------------------------------------------------------------------
+
+-spec update_execution_tree(reduced_scheduler_state(),
+                          reduced_scheduler_state(),
+                          execution_tree()) ->
+                             {reduced_scheduler_state(), execution_tree()}.
+
+update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
+  #reduced_scheduler_state{
+     trace = OldTrace
+    } = OldFragment,
+  #reduced_scheduler_state{
+     backtrack_size = BacktrackSize,
+     trace = Trace
+    } = Fragment,
+  io:fwrite("============UPDT=============~n",[]),
+  print_tree("", ExecutionTree),
+  io:fwrite("~n"),
+  print_trace(lists:reverse(OldTrace)),
+  io:fwrite("~n"),
+  print_trace(lists:reverse(Trace)),
+  io:fwrite("~n"),
+  {RevNewTrace, NewExecutionTree, BacktrackEntriesRemoved} =
+    update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree),
+  print_trace(RevNewTrace),
+  io:fwrite("~n"),
+  print_tree("", NewExecutionTree),
+  io:fwrite("=============================~n",[]),
+  OwnershipFixedFragment =
+    Fragment#reduced_scheduler_state{
+      backtrack_size = BacktrackSize - BacktrackEntriesRemoved,
+      trace = lists:reverse(RevNewTrace)
+     },
+  %% TODO add check here in case all backtrack entries are removed
+  {OwnershipFixedFragment, NewExecutionTree}.
+
+
+update_execution_tree_aux(
+  [_OldTraceState],
+  [_TraceState],
+  _ExecutionTree
+ ) ->
+  exit(impossible1);
+ %% same as below
+update_execution_tree_aux(
+  [_OldTraceState],
+  [_TraceState, _NextTraceState|_Rest],
+  _ExecutionTree
+ ) ->
+  %% This should not be possible because the current events of OldTraceState and TraceState
+  %% would be logically equal and since OldTraceState would be the last TraceState
+  %% of the initial fragment, its backtrack_entry would have definately been
+  %% explore and therefore the current events of those TraceStates would have not been the same
+  %% (i.e. logically equal)
+  exit(impossible2);
+update_execution_tree_aux(
+  [OldTraceState, OldNextTraceState|OldRest],
+  [TraceState],
+  ExecutionTree
+ ) ->
+  #trace_state_transferable{
+     done = OldDone
+    } = OldTraceState,
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  #execution_tree{
+     event = ActiveEvent
+    } = ExecutionTree,
+  %% TODO : maybe remove this check
+  [OldActiveEvent2|_] = OldDone,
+  [ActiveEvent2|_] = Done,
+  true = logically_equal(ActiveEvent2, ActiveEvent),
+  true = logically_equal(OldActiveEvent2, ActiveEvent),
+  UpdatedExecutionTree =
+    update_execution_tree_done_aux([OldTraceState, OldNextTraceState|OldRest], ExecutionTree), 
+  {[TraceState], UpdatedExecutionTree, 0};
+update_execution_tree_aux(
+  [OldTraceState, OldNextTraceState|OldRest], 
+  [TraceState, NextTraceState|Rest], 
+  ExecutionTree
+ ) ->
+  #trace_state_transferable{
+     done = OldDone
+    } = OldTraceState,
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  #trace_state_transferable{
+     done = OldNextDone
+     %% wakeup_tree = OldNextWuT
+    } = OldNextTraceState,
+  #trace_state_transferable{
+     done = NextDone,
+     sleep_set = Sleep,
+     wakeup_tree = NextWuT
+    } = NextTraceState,
+  #execution_tree{
+     active_children = ActiveChildren,
+     finished_children = FinishedChildren,
+     event = ActiveEvent,
+     next_wakeup_tree = WuT
+    } = ExecutionTree,
+  %% TODO : maybe remove this check
+  [OldActiveEvent2|_] = OldDone,
+  [ActiveEvent2|_] = Done,
+  true = logically_equal(ActiveEvent2, ActiveEvent),
+  true = logically_equal(OldActiveEvent2, ActiveEvent),
+  [NextActiveEvent|NextFinishedEvents] = NextDone,
+  [OldNextActiveEvent|_] = OldNextDone,
+  %% I may find some extra entries
+  %% at the NextWuT compared to the OldNextWuT. Those entries are the backtrack
+  %% points that this fragment will need to request ownership for. If those 
+  %% entries are found in the WuT, the ActiveChildren or the FinishedChildren
+  %% of the execution_tree, then some other fragment
+  %% has claimed ownership and therefore they must be added to the sleep-set of
+  %% the fragment and be removed from the wakeup_tree. Otherwise, this
+  %% fragment claims ownership over them, the owneship of those entries  gets
+  %% modified accordingly and they are inserted in the wakeup_tree of the central
+  %% tree.
+  {OwnedWuT, SharedWuT} = split_wut(NextWuT, [], []),
+  %% TODO : remove this check
+  %% ok = assert_equal_wut(OwnedWuT, OldNextWuT), <- this assertion is only correct if
+  %% the next events  are logically equal (else OwnedWuT could be smaller than OldNextWuT)
+  WuTEvents = [Entry#backtrack_entry_transferable.event || Entry <- WuT],
+  ActiveEvents = [Node#execution_tree.event || Node <- ActiveChildren],
+  {NewOwnedWuT, NotOwnedEvents} =
+    get_ownership(SharedWuT, WuTEvents ++ ActiveEvents ++ FinishedChildren, [], []),
+  UpdatedNextTraceState =
+    NextTraceState#trace_state_transferable{
+      sleep_set = NotOwnedEvents ++ Sleep,
+      wakeup_tree = OwnedWuT ++ NewOwnedWuT
+     },
+  case logically_equal(NextActiveEvent, OldNextActiveEvent) of
+    true ->
+      %% Recursively keep modifying the tree
+      %% Find the subtree that needs to be modified
+      {Prefix, [NextChild|Suffix]} = split_active_children(NextActiveEvent, ActiveChildren),
+      {[UpdatedNextTraceState|UpdatedRest], UpdatedActiveChildren, MaybeNewFinishedChild, EntriesRemoved} =
+        case update_execution_tree_aux(
+               [OldNextTraceState|OldRest],
+               [UpdatedNextTraceState|Rest],
+               NextChild
+              ) of
+          {UpdatedTrace, {node_finished, Event}, N} ->
+            %% io:fwrite("~n~p~n~p~n~p~n~p~n~p~n~p~n~p~n~p~n~p~n",
+            %%           [[OldTraceState, OldNextTraceState|OldRest],
+            %%            '----------------------------------------------------------------------------------',
+            %%            [TraceState, NextTraceState|Rest],
+            %%            '----------------------------------------------------------------------------------',
+            %%            UpdatedTrace,
+            %%            '----------------------------------------------------------------------------------',
+            %%            ExecutionTree,
+            %%            '----------------------------------------------------------------------------------',
+            %%            {node_finished, Event}]), %% TODO : remove this check , this part of the branch is probably not needed
+            
+            %% exit(impossible3),
+            {UpdatedTrace, Prefix ++ Suffix, [Event], N};
+          {UpdatedTrace, UpdatedChild, N} ->
+            {UpdatedTrace, Prefix ++ [UpdatedChild] ++ Suffix, [], N}
+        end,
+      UpdatedExecutionTree =
+        ExecutionTree#execution_tree{
+          active_children = UpdatedActiveChildren,
+          finished_children = MaybeNewFinishedChild ++ FinishedChildren,
+          next_wakeup_tree = WuT ++ NewOwnedWuT
+         },
+      {[TraceState, UpdatedNextTraceState|UpdatedRest], UpdatedExecutionTree, EntriesRemoved + length(NotOwnedEvents)};
+    false ->
+      %% The subtree of the active_children that corresponds to the OldNextActiveEvent
+      %% needs to be modified (perhaps even be deleted),
+      %% since this suffix of the trace_state is considered done. Also another subtree
+      %% that corresponds to the NextActiveEvent needs to be created and be put to the
+      %% active_children list
+      {UpdatedActiveChildren, MaybeNewFinishedChild} =
+        case split_active_children(OldNextActiveEvent, ActiveChildren) of
+          {Prefix, [OldChild|Suffix]} ->
+            case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
+              {node_finished, Event} ->
+                {Prefix ++ Suffix, [Event]};
+              UpdatedChild ->
+                {Prefix ++ [UpdatedChild] ++ Suffix, []}
+            end;
+          {ActiveChildren, []} ->
+            %% TODO : maybe remove this check
+            true = lists:member(OldNextActiveEvent#event_transferable.actor,
+                                [FC#event_transferable.actor || FC <- FinishedChildren]),
+            {ActiveChildren, []}
+        end,
+      %% The WuT of the central tree is modified to account for the events
+      %% of the backtrack of the initial fragment that were explored
+      NewFinishedChilren = get_finished_children_from_done(NextFinishedEvents, WuT),
+      ReducedWuT = get_reduced_wut_from_done(NextDone, WuT),
+      NewActiveChild = initialize_execution_tree_aux([NextTraceState|Rest]),
+      UpdatedExecutionTree =
+        ExecutionTree#execution_tree{
+          active_children = [NewActiveChild|UpdatedActiveChildren],
+          finished_children =
+            MaybeNewFinishedChild ++ NewFinishedChilren ++ FinishedChildren,
+          next_wakeup_tree = ReducedWuT ++ NewOwnedWuT %% This is NOT OKAY WuT needs to be reduced
+         },
+      {[TraceState, UpdatedNextTraceState|Rest], UpdatedExecutionTree, length(NotOwnedEvents)}
+  end.
+
+split_wut([], OwnedWuT, SharedWuT) ->
+  {OwnedWuT, SharedWuT};
+%% TODO check if I need to reverse these
+split_wut([Entry|Rest], OwnedWuT, SharedWuT) ->
+  case Entry#backtrack_entry_transferable.ownership of
+    true ->
+      split_wut(Rest, [Entry|OwnedWuT], SharedWuT);
+    false ->
+      split_wut(Rest, OwnedWuT, [Entry|SharedWuT])
+  end.
+
+get_ownership(SharedWuT, [], NewOwnedWuT, NotOwnedEvents) ->
+  %% owneship is claimed
+  OwnedWut =
+    [Entry#backtrack_entry_transferable{ownership = true} || Entry <- SharedWuT],
+  {OwnedWut ++ NewOwnedWuT, NotOwnedEvents};
+get_ownership([], _, NewOwnedWuT, NotOwnedEvents) ->
+  {NewOwnedWuT, NotOwnedEvents};
+get_ownership([Entry|RestWuT], Events, NewOwnedWuT, NotOwnedEvents) ->
+  Pred =
+    fun(Event) ->
+        not same_actor(Event, Entry#backtrack_entry_transferable.event)
+    end,
+  case lists:splitwith(Pred, Events) of
+    {_AllEvents, []} ->
+      %% ownership is claimed
+      OwnedEntry = Entry#backtrack_entry_transferable{ownership = true},
+      get_ownership(RestWuT, Events, [OwnedEntry|NewOwnedWuT], NotOwnedEvents);
+    {Prefix, [EqualEvent|Suffix]} ->
+      %% ownership is not claimed
+      NotOwnedEvent = #event_transferable{actor = EqualEvent#event_transferable.actor},
+      %% I am doing this in order to not carry unecessary info about the event
+      %% TODO make sure that it is okay to do this
+      get_ownership(RestWuT, Prefix ++ Suffix, NewOwnedWuT, [NotOwnedEvent|NotOwnedEvents])
+  end.
+
+assert_equal_wut([], []) -> ok;
+assert_equal_wut([Entry|Rest], WuT) ->
+  Pred =
+    fun(BacktrackEntry) ->
+        not logically_equal(Entry#backtrack_entry_transferable.event,
+                            BacktrackEntry#backtrack_entry_transferable.event)
+    end,
+  assert_equal_wut(Rest, lists:filter(Pred, WuT)).
+
+%%------------------------------------------------------------------------------
+
+-spec update_execution_tree_done(reduced_scheduler_state(), execution_tree()) ->
+                                  execution_tree().
+
+update_execution_tree_done(Fragment, ExecutionTree) ->
+  #reduced_scheduler_state{trace = Trace} = Fragment,
+  io:fwrite("============DONE=============~n",[]),
+  print_tree("", ExecutionTree),
+  io:fwrite("~n"),
+  print_trace(lists:reverse(Trace)),
+  io:fwrite("~n"),
+  case update_execution_tree_done_aux(lists:reverse(Trace), ExecutionTree) of
+    {node_finished, _Ev} ->
+      io:fwrite("Node finished:~p~n", _Ev),
+      io:fwrite("============DONE=============~n",[]),
+      empty;
+    UpdatedTree ->
+      print_tree("", UpdatedTree),
+      io:fwrite("=============================~n",[]),
+      UpdatedTree
+  end.
+
+update_execution_tree_done_aux([LastTraceState], ExecutionTree) ->
+%% this TraceState must have a non-empty wakeup tree since it is the last
+%% TraceState of fragment that was send to be explored and this exploration
+%% completed. This wakeup three would have been added to the parent node of the
+%% subtree ExecutionTree. If I find no more active children or backtrack entries at
+%% this node then this subtree is considered finished(no other fragment accessing it)
+%% otherwise I return the complete subtree unmodified
+  #trace_state_transferable{
+     done = Done
+    } = LastTraceState,
+  #execution_tree{
+     active_children = ActiveChildren,
+     event = ActiveEvent,
+     next_wakeup_tree = WuT
+    } = ExecutionTree,
+  %% TODO : maybe remove this check
+  [ActiveEvent2|_] = Done,
+  true = logically_equal(ActiveEvent2, ActiveEvent),
+  case WuT =:= [] andalso ActiveChildren =:= [] of
+    true ->
+      %% this node is done, everything underneath it is explored
+      {node_finished, ActiveEvent};
+    false ->
+      ExecutionTree
+  end;
+update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  #trace_state_transferable{
+     done = NextDone,
+     wakeup_tree = NextWuT
+    } = NextTraceState,
+  #execution_tree{
+     active_children = ActiveChildren,
+     finished_children = FinishedChildren,
+     event = ActiveEvent,
+     next_wakeup_tree = WuT
+    } = ExecutionTree,
+  %% TODO : maybe remove this check
+  [ActiveEvent2|_] = Done,
+  true = logically_equal(ActiveEvent2, ActiveEvent),
+  [NextActiveEvent|_] = NextDone,
+  %% updates the child tree that corresponds to the next trace_state and perhaps
+  %% deletes this subtree (if no other fragments access the subsequence that begins
+  %% with this child)
+  %% {MaybeNewFinishedChild, UpdatedActiveChildren} =
+  %%   update_active_child_done([NextTraceState|Rest], ActiveChildren, NextActiveEvent),
+  %% {Prefix, [NextChild|Suffix]} = split_active_children(NextActiveEvent, ActiveChildren),
+  {Prefix, [NextChild|Suffix]} =
+    split_active_children(NextActiveEvent, ActiveChildren),
+  {UpdatedActiveChildren, MaybeNewFinishedChild} =
+    case update_execution_tree_done_aux([NextTraceState|Rest], NextChild) of
+      {node_finished, Event} ->
+        {Prefix ++ Suffix, [Event]};
+      UpdatedChild ->
+        {Prefix ++ [UpdatedChild] ++ Suffix, []}
+    end,
+  %% I know NextWuT has been completely explored so I filter its entries from
+  %% the wakeup_tree of the node
+  {NewFinishedChilren, UpdatedWuT} = get_finished_children_from_wut(NextWuT, WuT),
+  case UpdatedWuT =:= [] andalso UpdatedActiveChildren =:= [] of
+    true ->
+      %% this node is done, everything underneath it is explored
+      {node_finished, ActiveEvent};
+    false ->
+      ExecutionTree#execution_tree{
+        active_children = UpdatedActiveChildren,
+        finished_children =
+          MaybeNewFinishedChild ++ NewFinishedChilren ++ FinishedChildren,
+        next_wakeup_tree = UpdatedWuT
+       }
+  end.
+
+%%------------------------------------------------------------------------------
+%% UTIL
+%%------------------------------------------------------------------------------
+
+split_active_children(ActiveEvent, ActiveChildren) ->      
+  Pred =
+    fun(Child) ->
+        not logically_equal(Child#execution_tree.event, ActiveEvent)
+    end,
+  lists:splitwith(Pred, ActiveChildren).
+
+get_finished_children_from_done(Done, ExecutionTreeWuT) ->
+  Pred =
+    fun(Entry) ->
+        Event = Entry#backtrack_entry_transferable.event,
+        event_is_member(Event, Done)
+    end,
+  ExploredWuT = lists:filter(Pred, ExecutionTreeWuT),
+  %% but add to new finished children only the tail of done
+  [Entry#backtrack_entry_transferable.event || Entry <- ExploredWuT].
+
+get_reduced_wut_from_done(Done, ExecutionTreeWuT) ->
+  Pred =
+    fun(Entry) ->
+        Event = Entry#backtrack_entry_transferable.event,
+        not event_is_member(Event, Done)
+    end,
+  %% filter wut with all events from done
+  lists:filter(Pred, ExecutionTreeWuT).
+
+get_finished_children_from_wut(FinishedNextWuT, ExecutionTreeWuT) ->
+  NewFinishedChilren = [Entry#backtrack_entry_transferable.event || Entry <- FinishedNextWuT],
+  Pred =
+    fun(Entry) ->
+        Event = Entry#backtrack_entry_transferable.event,
+        not event_is_member(Event, NewFinishedChilren)
+    end,
+  UpdatedWuT = lists:filter(Pred, ExecutionTreeWuT),
+  {NewFinishedChilren, UpdatedWuT}.
+
+event_is_member(_, []) ->
+  false;
+event_is_member(Event, [H|T]) ->
+  case same_actor(Event, H) of
+    true ->
+      true;
+    false ->
+      event_is_member(Event, T)
+  end.
+
+same_actor(Event1, Event2) ->
+  Event1#event_transferable.actor =:= Event2#event_transferable.actor.
+
+%%------------------------------------------------------------------------------
 
 -spec distribute_interleavings(
         reduced_scheduler_state(),
@@ -2178,12 +2641,14 @@ distribute_interleavings(State, FragmentsNeeded) ->
   NewFragments =
     [State#reduced_scheduler_state{
        backtrack_size = 1,
+       safe = false,
        trace = T
       } || T <- NewFragmentTraces],
   %% IdleScheduler ! {explore, make_state_transferable(UnloadedState)},
   NewState =
     State#reduced_scheduler_state{
       backtrack_size = BacktrackSize - EntriesGiven,
+      safe = false,
       trace = UpdatedTrace
      },
   {NewState, NewFragments, EntriesGiven}.
@@ -2225,7 +2690,9 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
                                RevTracePrefix,
                                N-1,
                                [NewFragmentTrace|FragmentTraces]).
-    
+
+%%------------------------------------------------------------------------------
+
 -spec fix_ownership(
         reduced_scheduler_state(),
         [reduced_scheduler_state()],
@@ -2304,18 +2771,18 @@ remove_not_owned([TraceStateToBeFixed|RestToBeFixed], [TraceState|Rest], FixedFr
       %% !!!!!!!
       %% TODO make sure whether this holds or not
       RestFixed =
-      case exists(EventToBeFixed, Done) of
-        false ->
-          Rest;
-        true ->
-          remove_all_not_owned(Rest)
-      end,
+        case exists(EventToBeFixed, Done) of
+          false ->
+            Rest;
+          true ->
+            remove_all_not_owned(Rest)
+        end,
       %% !!!!!!!
       %% TODO check if there is something additional I can remove here
       %% 1 2 3 vs 1 2 3' => claim ownership of backtrack underneath
       %% probably this only works as a heuristic
       %% TODO figure out if this is the correct course of action here
-      lists:reverse([FixedTraceState|Rest]) ++ FixedFragmentPrefix
+      lists:reverse([FixedTraceState|RestFixed]) ++ FixedFragmentPrefix
   end.
 
 remove_all_not_owned([]) ->
@@ -2388,6 +2855,7 @@ make_state_transferable(State) ->
      last_scheduled = pid_to_list(LastScheduled),
      need_to_replay = NeedToReplay,
      origin = Origin,
+     safe = true,
      trace = [make_trace_state_transferable(TraceState) || TraceState <- Trace]
     }.
 
@@ -2632,6 +3100,8 @@ revert_state(PreviousState, ReducedState) ->
      last_scheduled = LastScheduled,
      need_to_replay = NeedToReplay,
      origin = Origin,
+     safe = Safe, %% safe meens that this fragment has not been distributed
+     %% TODO maybe remove this
      trace = Trace
     } = ReducedState,
   PreviousState#scheduler_state{
@@ -2639,10 +3109,10 @@ revert_state(PreviousState, ReducedState) ->
     last_scheduled = list_to_pid(LastScheduled),
     need_to_replay = NeedToReplay,
     origin = Origin,
-    trace = [revert_trace_state(TraceState) || TraceState <- Trace]
+    trace = [revert_trace_state(TraceState, Safe) || TraceState <- Trace]
    }.
 
-revert_trace_state(TraceState) ->
+revert_trace_state(TraceState, Safe) ->
   #trace_state_transferable{ 
      actors = Actors,
      clock_map = ClockMapList,
@@ -2664,7 +3134,7 @@ revert_trace_state(TraceState) ->
      done = [revert_event(Event) || Event <- Done],
      enabled = [revert_actor(Actor) || Actor <- Enabled],
      index = Index,
-     ownership = Ownership,
+     ownership = Ownership and Safe,
      unique_id = UniqueId,
      previous_actor = revert_actor(PreviousActor),
      scheduling_bound = SchedulingBound,
