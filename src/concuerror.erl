@@ -79,8 +79,8 @@ start(Options, LogMsgs) ->
       false ->
         concuerror_process_spawner:stop(?opt(process_spawner, SchedulerOptions)),        
         SchedulerStatus = get_scheduler_status(Reason, Logger),
-        concuerror_logger:stop(Logger, SchedulerStatus),
-        concuerror_controller:report_stats(maps:new(), _StartTime, _EndTime);
+        concuerror_logger:stop(Logger, SchedulerStatus);
+        %% concuerror_controller:report_stats(maps:new(), _StartTime, _EndTime);
       true ->
         Reason
     end,

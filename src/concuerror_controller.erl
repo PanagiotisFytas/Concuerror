@@ -12,7 +12,9 @@
           busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
           idle              :: [pid()],
           idle_frontier     :: [concuerror_scheduler:reduced_scheduler_state()],
-          scheduling_start  :: integer()
+          scheduling_start  :: integer(),
+          budget_exceeded = 0  :: integer(),
+          ownership_claims = 0 :: integer()
          }).
 %%------------------------------------------------------------------------------
 
@@ -36,18 +38,19 @@ initialize_controller(Nodes) ->
   Schedulers = lists:sort(Fun, UnsortedSchedulers),
   SchedulerPids = [Pid || {Pid, _} <- Schedulers],
   [InitialScheduler|_Rest] = SchedulerPids,
-  InitialScheduler ! {start, ?budget / N},
+  InitialScheduler ! {start, 0},
   SchedulingStart = erlang:monotonic_time(),
-  InitUptimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
-  Uptimes = update_scheduler_started(InitialScheduler, InitUptimes),
-  {IdleFrontier, ExecutionTree} =
+  %% InitUptimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
+  %% Uptimes = update_scheduler_started(InitialScheduler, InitUptimes),
+  {IdleFrontier, ExecutionTree, Duration, InterleavingsExplored} =
     receive
-      {budget_exceeded, InitialScheduler, NewFragment} ->
-        {[NewFragment], concuerror_scheduler:initialize_execution_tree(NewFragment)};
-      {done, InitialScheduler} ->
-        {[], empty}
+      {budget_exceeded, InitialScheduler, NewFragment, D, IE} ->
+        {[NewFragment], concuerror_scheduler:initialize_execution_tree(NewFragment), D, IE};
+      {done, InitialScheduler, D, IE} ->
+        {[], empty, D, IE}
     end,
-  NewUptimes = update_scheduler_stopped(InitialScheduler, Uptimes),
+  InitUptimes = maps:from_list([{Pid, {SchedId, 0, 0}} || {Pid, SchedId} <- Schedulers]),
+  NewUptimes = update_scheduler_stopped(InitialScheduler, InitUptimes, Duration, InterleavingsExplored),
   Busy = [],
   Idle = SchedulerPids,
   InitialStatus =
@@ -77,9 +80,15 @@ controller_loop(#controller_status{
   when IdleFrontier =:= [] andalso Busy =:= [] ->
   SchedulingEnd = erlang:monotonic_time(),
   %% TODO : remove this check
-  empty = Status#controller_status.execution_tree,
+  %% empty = Status#controller_status.execution_tree, %% this does not hold true
+  case Status#controller_status.execution_tree =/= empty of
+    true ->
+      concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
+    false ->
+      ok
+  end,
   #controller_status{
-     schedulers_uptime = Uptimes,
+     schedulers_uptime = _Uptimes,
      idle = Idle,
      scheduling_start = SchedulingStart
     } = Status,
@@ -88,7 +97,7 @@ controller_loop(#controller_status{
   receive
     {stop, Pid} ->
       %%SchedulingEnd = erlang:monotonic_time(),
-      report_stats(Uptimes, SchedulingStart, SchedulingEnd),
+      report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
       Pid ! done
   end;
 controller_loop(Status) ->
@@ -107,41 +116,57 @@ wait_scheduler_response(Status) ->
      busy = Busy,
      execution_tree = ExecutionTree,
      idle = Idle,
-     idle_frontier = IdleFrontier
+     idle_frontier = IdleFrontier,
+     budget_exceeded = BE,
+     ownership_claims = OC
     } = Status,
   receive
-    {claim_ownership, Scheduler, Fragment} ->
-      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
+    {claim_ownership, Scheduler, Fragment, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       {NewIdleFragment, NewExecutionTree} =
         concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree),
-      NewIdleFrontier = [NewIdleFragment|IdleFrontier],
+      NewIdleFrontier =
+        case NewIdleFragment =:= fragment_finished of
+          false ->
+            [NewIdleFragment|IdleFrontier];
+          true ->
+            IdleFrontier
+        end,
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
                         busy = NewBusy,
                         execution_tree = NewExecutionTree,
                         idle = NewIdle,
-                        idle_frontier = NewIdleFrontier
+                        idle_frontier = NewIdleFrontier,
+                        ownership_claims = OC + 1
                        });
-    {budget_exceeded, Scheduler, Fragment} ->
-      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
+    {budget_exceeded, Scheduler, Fragment, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       {NewIdleFragment, NewExecutionTree} =
         concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree),
-      NewIdleFrontier = [NewIdleFragment|IdleFrontier],
+      NewIdleFrontier =
+        case NewIdleFragment =:= fragment_finished of
+          false ->
+            [NewIdleFragment|IdleFrontier];
+          true ->
+            IdleFrontier
+        end,
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
                         busy = NewBusy,
                         execution_tree = NewExecutionTree,
                         idle = NewIdle,
-                        idle_frontier = NewIdleFrontier
+                        idle_frontier = NewIdleFrontier,
+                        budget_exceeded = BE + 1
                        });
-    {done, Scheduler} ->
-      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes),
+    {done, Scheduler, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
       %% TODO I must figure out what do with this fragments that holds the
       %% backtack (i.e the nodes that has been explored by that scheduler
@@ -183,7 +208,7 @@ assign_work(Status) ->
      idle_frontier = [Fragment|RestIdleFrontier]
     } = Status,
   Scheduler ! {explore, Fragment, ?budget/length([Scheduler|RestIdle])},
-  NewUptimes = update_scheduler_started(Scheduler, Uptimes),
+  NewUptimes = Uptimes, %% update_scheduler_started(Scheduler, Uptimes),
   UpdatedStatus =
     Status#controller_status{
       busy = [{Scheduler, Fragment}|Busy],
@@ -237,13 +262,27 @@ update_scheduler_started(Scheduler, Uptimes) ->
   maps:update_with(Scheduler, Fun, Uptimes).
 
 
-update_scheduler_stopped(Scheduler, Uptimes) ->
-  PeriodEnd = erlang:monotonic_time(),
+update_scheduler_stopped(Scheduler, Uptimes, Duration, IE) ->
+  %% PeriodEnd = erlang:monotonic_time(),
+  %% Fun =
+  %%   fun({SchedId, PeriodStart, Acc}) ->
+  %%       {SchedId, undefined, Acc + PeriodEnd - PeriodStart} 
+  %%   end,
+  %% maps:update_with(Scheduler, Fun, Uptimes).
   Fun =
-    fun({SchedId, PeriodStart, Acc}) ->
-        {SchedId, undefined, Acc + PeriodEnd - PeriodStart} 
+    fun({Id, Acc1, Acc2}) ->
+        {Id, Acc1 + Duration, Acc2 + IE} 
     end,
   maps:update_with(Scheduler, Fun, Uptimes).
+
+report_stats_parallel(Status, Start, End) ->
+  #controller_status{
+     schedulers_uptime = Uptimes,
+     budget_exceeded = BE,
+     ownership_claims = OC
+    } = Status,
+  io:fwrite("Budget Exceeded: ~B~nOwnership Claims: ~B~n", [BE, OC]), 
+  report_stats(Uptimes, Start, End).
 
 -spec report_stats(maps:map(), integer(), integer()) -> ok.
 
@@ -255,16 +294,28 @@ report_stats(Uptimes, Start, End) ->
   io:fwrite("Scheduling Time: ~wm~.3fs~n", [Minutes, Seconds]),
   Fun =
     fun(A,B) ->
-        {_,{IdA,_,_}} = A,
-        {_,{IdB,_,_}} = B,
+        {_, {IdA, _, _}} = A,
+        {_, {IdB, _, _}} = B,
         IdA =< IdB
     end,
-  report_utilization(lists:sort(Fun, maps:to_list(Uptimes)), End - Start).
+  ListUptimes = lists:sort(Fun, maps:to_list(Uptimes)),
+  case ListUptimes of
+    [] ->
+      ok;
+    _ ->
+      report_utilization(ListUptimes, Timediff),
+      report_avg_time(ListUptimes, 0, 0)
+  end.
 
 report_utilization([], _) ->
   ok;
-report_utilization([{_,{SchedulerId, undefined, RunningTime}}|Rest],
+report_utilization([{_, {SchedulerId, RunningTime, InterleavingsExplored}}|Rest],
                    TotalRunningTime) ->
   Utilization = RunningTime / TotalRunningTime * 100,
-  io:fwrite("Scheduler ~w: ~.2f% Utilization~n", [SchedulerId, Utilization]),
+  io:fwrite("Scheduler ~w: ~.2f% Utilization, ~B Interleavings Explored~n", [SchedulerId, Utilization, InterleavingsExplored]),
   report_utilization(Rest, TotalRunningTime).
+
+report_avg_time([], Sum, N) ->
+  io:fwrite("Total of ~B interleavings with average duration of ~.3fs", [N, Sum/1000/N]);
+report_avg_time([{_, {_, Duration, IE}}|Rest], Sum, N) ->
+  report_avg_time(Rest, Sum + Duration, N + IE).

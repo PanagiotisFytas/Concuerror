@@ -199,6 +199,7 @@ complete(Logger, Warnings) ->
   Logger ! {complete, Warnings, self(), Ref},
   receive
     Ref -> ok
+  %after 0 -> ok %% TODO remove
   end.
 
 -spec log(logger(), log_level(), term(), string(), [term()]) -> ok.
@@ -1168,7 +1169,6 @@ start_wrapper(Options) ->
       P
   end.
 
-
 initialize_wrapper(Options, Logger) ->
   Nodes = ?opt(nodes, Options),
   #wrapper_state{
@@ -1181,7 +1181,6 @@ initialize_wrapper(Options, Logger) ->
      schedulers = maps:from_list(lists:zip(Nodes, lists:seq(1, length(Nodes))))
     }. 
 
-%% wrapper_loop(Logger, LoggerStatus, Queues, Jobs) 
 wrapper_loop(State)  ->
   #wrapper_state{
      current_job = CurrentJob,
@@ -1203,50 +1202,67 @@ wrapper_loop(State)  ->
           current_job = MaybeUpdatedCurrentJob,
           calls_to_logger = maps:update(Node, queue:new(), LoggerCalls)
          },
-      wrapper_loop(UpdatedState);
-    Ref when Ref =:= CurrentJob ->
-      {Head, JobsLeft} = queue:out(Jobs),
-      NewLoggerJob = 
-        case Head of
-          {value, NextJob} ->
-            {NextRef, NextFun} = NextJob,
-            _ = spawn_link(NextFun),
-            NextRef;
-          empty ->
-            none
-        end,
-      UpdatedState =
-        State#wrapper_state{
-          jobs = JobsLeft,
-          current_job = NewLoggerJob
-         },
-      wrapper_loop(UpdatedState);
-    {stop, CombinedStatus, ControllerParent} ->
-      %% makes sure that logger is empty
-      finish_scheduled_jobs(CurrentJob, Jobs),
-      log_incomplete_jobs(Logger, maps:values(LoggerCalls)),
-      SchedulerStatus = concuerror:get_scheduler_status(CombinedStatus, Logger),
-      ExitStatus = stop(Logger, SchedulerStatus),
-      ControllerParent ! {stopped, ExitStatus};
-    LogRequest ->
-      %% Asyncronus request
-      RequestList = tuple_to_list(LogRequest),
-      Scheduler = lists:last(RequestList),
-      Node = node(Scheduler),
-      MaybeModifyLogRequest =
-        case LogRequest of
-          {time, Tag, Scheduler} ->
-            #wrapper_state{schedulers = SchedulerNumbers} = State,
-            FixedTag = io_lib:format("Scheduler ~w: ~s", [maps:get(Node, SchedulerNumbers), Tag]),
-            {time, FixedTag, Scheduler};
-          OtherLogRequest ->
-            OtherLogRequest
-        end,
-      LogQueue = maps:get(Node, LoggerCalls),
-      UpdatedLogQueue = queue:in(MaybeModifyLogRequest, LogQueue),
-      UpdatedLoggerCalls = maps:update(Node, UpdatedLogQueue, LoggerCalls),
-      UpdatedState = State#wrapper_state{calls_to_logger = UpdatedLoggerCalls},
       wrapper_loop(UpdatedState)
+  after 0 ->
+      receive
+        {complete, Warn, Scheduler, Ref} ->
+          Scheduler ! Ref, %% complete is a synchronus call to the logger
+          Node = node(Scheduler),
+          LogQueue = maps:get(Node, LoggerCalls),
+          CompleteLogQueue = queue:in({complete, Warn, self(), Ref}, LogQueue),
+          {MaybeUpdatedCurrentJob, MaybeUpdatedJobs} =
+            schedule_log_job(State, Ref, CompleteLogQueue),
+          UpdatedState =
+            State#wrapper_state{
+              jobs = MaybeUpdatedJobs,
+              current_job = MaybeUpdatedCurrentJob,
+              calls_to_logger = maps:update(Node, queue:new(), LoggerCalls)
+             },
+          wrapper_loop(UpdatedState);
+        Ref when Ref =:= CurrentJob ->
+          {Head, JobsLeft} = queue:out(Jobs),
+          NewLoggerJob = 
+            case Head of
+              {value, NextJob} ->
+                {NextRef, NextFun} = NextJob,
+                _ = spawn_link(NextFun),
+                NextRef;
+              empty ->
+                none
+            end,
+          UpdatedState =
+            State#wrapper_state{
+              jobs = JobsLeft,
+              current_job = NewLoggerJob
+             },
+          wrapper_loop(UpdatedState);
+        {stop, CombinedStatus, ControllerParent} ->
+          %% makes sure that logger is empty
+          finish_scheduled_jobs(CurrentJob, Jobs),
+          log_incomplete_jobs(Logger, maps:values(LoggerCalls)),
+          SchedulerStatus = concuerror:get_scheduler_status(CombinedStatus, Logger),
+          ExitStatus = stop(Logger, SchedulerStatus),
+          ControllerParent ! {stopped, ExitStatus};
+        LogRequest ->
+          %% Asyncronus request
+          RequestList = tuple_to_list(LogRequest),
+          Scheduler = lists:last(RequestList),
+          Node = node(Scheduler),
+          MaybeModifyLogRequest =
+            case LogRequest of
+              {time, Tag, Scheduler} ->
+                #wrapper_state{schedulers = SchedulerNumbers} = State,
+                FixedTag = io_lib:format("Scheduler ~w: ~s", [maps:get(Node, SchedulerNumbers), Tag]),
+                {time, FixedTag, Scheduler};
+              OtherLogRequest ->
+                OtherLogRequest
+            end,
+          LogQueue = maps:get(Node, LoggerCalls),
+          UpdatedLogQueue = queue:in(MaybeModifyLogRequest, LogQueue),
+          UpdatedLoggerCalls = maps:update(Node, UpdatedLogQueue, LoggerCalls),
+          UpdatedState = State#wrapper_state{calls_to_logger = UpdatedLoggerCalls},
+          wrapper_loop(UpdatedState)
+      end
   end.
 
 schedule_log_job(State, Ref, LogQueue) ->
