@@ -217,6 +217,7 @@
           last_scheduled  :: pid(),
           need_to_replay  :: boolean(),
           origin          :: interleaving_id(),
+          processes_ets_tables :: [atom()],
           safe            :: boolean(),
           trace           :: [trace_state()]
          }).
@@ -549,7 +550,7 @@ log_trace(#scheduler_state{logger = Logger} = State) ->
             #scheduler_state{trace = Trace} = State,
             Fold =
               fun(#trace_state{done = [A|_], index = I}, Acc) ->
-                  [{I, make_term_transferable(A)}|Acc] %% TODO remove the make_term_transferable !!!
+                  [{I, A}|Acc] %% TODO add and remove the make_term_transferable !!!
               end,
             TraceInfo = lists:foldl(Fold, [], Trace),
             {lists:reverse(Errors), TraceInfo}
@@ -692,43 +693,67 @@ get_next_event(Event, MaybeNeedsReplayState) ->
       AvailableActors = filter_sleep_set(SleepSet, SortedActors),
       free_schedule(Event, AvailableActors, State);
     false ->
-      #scheduler_state{print_depth = PrintDepth} = State,
+      #scheduler_state{
+         print_depth = PrintDepth,
+         replay_mode = ReplayMode
+        } = State,
       #trace_state{index = I} = Last,
       false = lists:member(Actor, SleepSet),
       OkUpdatedEvent =
         case Label =/= undefined of
           true ->
-            NewEvent = get_next_event_backend(Event, State),
-            try {ok, Event} = NewEvent
-            catch
-              _:_ ->
-                New =
-                  case NewEvent of
-                    {ok, E} -> E;
-                    _ -> NewEvent
-                  end,
-                case logically_equal(State, Event, New)
-                of
-                  true ->
-                    NewEvent;
-                  false ->
-                    %% EventInfo = Event#event.event_info,
-                    %% NewEventInfo = New#event.event_info,
-                    %% {1, Fun} = EventInfo#receive_event.receive_info,
-                    %% {1,NewFun} = NewEventInfo#receive_event.receive_info,
-                    %% exit(erlang:fun_info(Fun), erlang:fun_info(NewFun)),
+            io:fwrite("Node :~p 1111111111111111~n",[node()]),
+            %% TODO check why this seems to work
+            NewEvent =
+              case ReplayMode of
+                pseudo ->
+                  get_next_event_backend(Event, State);
+                actual ->
+                  EventInfo = Event#event.event_info,
+                  case EventInfo of
+                    #builtin_event{} ->
+                      FixedEventInfo = EventInfo#builtin_event{actual_replay = true},
+                      {ok, NewE} = get_next_event_backend(Event#event{event_info = FixedEventInfo}, State),
+                      NewEInfo = NewE#event.event_info,
+                      FixedNewEInfo = NewEInfo#builtin_event{actual_replay = false},
+                      {ok, NewE#event{event_info = FixedNewEInfo}};
+                    _ ->
+                      get_next_event_backend(Event#event{event_info = undefined}, State)
+                  end
+              end,
+              try
+                  case ReplayMode of
+                    pseudo ->
+                      {ok, Event} = NewEvent;
+                    actual ->
+                      {ok, MaybeEvent} = NewEvent,
+                      true = logically_equal(State, Event, MaybeEvent),
+                      NewEvent
+                  end
+              catch
+                  _:_ ->
+                    New =
+                      case NewEvent of
+                        {ok, E} -> E;
+                        _ -> NewEvent
+                      end,
                     Reason = {replay_mismatch, I, Event, New, PrintDepth},
                     ?crash(Reason)
-                end
-            end;
+              end;
           false ->
+            io:fwrite("Node :~p 2222222222222222222~n",[node()]),
             %% Last event = Previously racing event = Result may differ.
             ResetEvent = reset_event(Event),
             get_next_event_backend(ResetEvent, State)
         end,
       case OkUpdatedEvent of
         {ok, UpdatedEvent} ->
-          update_state(UpdatedEvent, State);
+          case ReplayMode of
+            pseudo ->
+              update_state(UpdatedEvent, State);
+            actual ->
+              update_state(UpdatedEvent, State)
+          end;
         retry ->
           BReason = {blocked_mismatch, I, Event, PrintDepth},
           ?crash(BReason)
@@ -1931,15 +1956,21 @@ replay_prefix(Trace, State) ->
      entry_point = EntryPoint,
      first_process = FirstProcess,
      processes = Processes,
-     timeout = Timeout
+     timeout = Timeout,
+     replay_mode = ReplayMode
     } = State,
   concuerror_callback:reset_processes(Processes),
   ok =
     concuerror_callback:start_first_process(FirstProcess, EntryPoint, Timeout),
   NewState = State#scheduler_state{last_scheduled = FirstProcess},
-  replay_prefix_aux(lists:reverse(Trace), NewState).
+  case ReplayMode of
+    pseudo ->
+      replay_prefix_aux(lists:reverse(Trace), NewState);
+    actual ->
+      replay_prefix_aux(lists:reverse(Trace), NewState#scheduler_state{trace = []})
+  end.
 
-replay_prefix_aux([_], State) ->
+replay_prefix_aux([_Last], State) ->
   %% TODO : 
   %% when another interleaving is replayed the old interleaving (more correctly
   %% the traces of the first inteleaving that are always before a backtrack)
@@ -1953,12 +1984,20 @@ replay_prefix_aux([_], State) ->
   %%   false ->
   %%     State
   %% end;
-  State;
-replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
+  #scheduler_state{replay_mode = ReplayMode} = State,
+  case ReplayMode of
+    pseudo ->
+      State;
+    actual ->
+      #scheduler_state{trace = Trace} = State,
+      State#scheduler_state{trace = [_Last|Trace]}
+  end;
+replay_prefix_aux([#trace_state{done = [Event|RestDone], index = I} = TraceState|Rest], State) ->
   #scheduler_state{
      logger = _Logger,
      print_depth = PrintDepth,
-     replay_mode = ReplayMode
+     replay_mode = ReplayMode,
+     parallel = Parallel
     } = State,
   ?debug(_Logger, "~s~n", [?pretty_s(I, Event)]),
   {ok, #event{actor = Actor} = NewEvent} =
@@ -1966,29 +2005,46 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
       pseudo ->
         get_next_event_backend(Event, State);
       actual ->
-        get_next_event_backend(Event#event{event_info = undefined}, State)
+        EventInfo = Event#event.event_info,
+        case EventInfo of
+          #builtin_event{} ->
+            FixedEventInfo = EventInfo#builtin_event{actual_replay = true},
+            {ok, NewE} = get_next_event_backend(Event#event{event_info = FixedEventInfo}, State),
+            NewEInfo = NewE#event.event_info,
+            FixedNewEInfo = NewEInfo#builtin_event{actual_replay = false},
+            {ok, NewE#event{event_info = FixedNewEInfo}};
+          _ ->
+            get_next_event_backend(Event#event{event_info = undefined}, State)
+        end
     end,
   try
-    true = Event =:= NewEvent
+    case Parallel of
+      false ->
+        true = Event =:= NewEvent;
+      true ->
+        true = logically_equal(State, Event, NewEvent)
+    end
   catch
     _C:_R ->
-      case logically_equal(State, Event, NewEvent)
-      of
-        true ->
-          ok;
-        %% {erlang,spawn,[erlang,apply,[Fun,[]]]} = EventInfo#builtin_event.mfargs,
-        %% {erlang,spawn,[erlang,apply,[NewFun,[]]]} = NewEventInfo#builtin_event.mfargs,
-        %% exit(erlang:fun_info(Fun), erlang:fun_info(NewFun));
-        false ->
-          ?crash({replay_mismatch, I, Event, NewEvent, PrintDepth})
-      end
+      ?crash({replay_mismatch, I, Event, NewEvent, PrintDepth})
   end,
   NewLastScheduled =
     case is_pid(Actor) of
       true -> Actor;
       false -> State#scheduler_state.last_scheduled
     end,
-  NewState = State#scheduler_state{last_scheduled = NewLastScheduled},
+  NewState =
+    case ReplayMode of
+      pseudo ->
+        State#scheduler_state{last_scheduled = NewLastScheduled};
+      actual ->
+        #scheduler_state{trace = Trace} = State,
+        NewTraceState = TraceState#trace_state{done = [NewEvent|RestDone]}, %% TODO make sure that this does not messes the wut
+        State#scheduler_state{
+          last_scheduled = NewLastScheduled,
+          trace = [NewTraceState|Trace]
+         }
+    end,
   replay_prefix_aux(Rest, maybe_log(Event, NewState, I)).
 
 %%------------------------------------------------------------------------------
@@ -2001,6 +2057,10 @@ logically_equal(#scheduler_state{parallel = Parallel}, _, _)
   when Parallel =:= false ->
   false;
 logically_equal(_, Event, NewEvent) ->
+  %% #event{event_info = EventInfo} = Event,
+  %% #event{event_info = NewEventInfo} = NewEvent,
+  %% case EventInfo of
+  %%   #builtin_event ->  
   logically_equal_aux(Event, NewEvent).
   
 logically_equal_aux([], []) ->
@@ -2008,6 +2068,25 @@ logically_equal_aux([], []) ->
 logically_equal_aux([H|T], [NewH|NewT]) ->
   logically_equal_aux(H, NewH)
     andalso logically_equal_aux(T, NewT);
+logically_equal_aux(#builtin_event{} = EventInfo, #builtin_event{} = NewEventInfo) ->
+  #builtin_event{
+     %% actor = Actor,
+     %% extra = Extra,
+     %% exiting = Exiting,
+     mfargs = MFArgs
+     %% result = Result,
+     %% status = Status,
+     %% trapping = Trapping,
+     %% actual_replay = ActualReplay
+    } = EventInfo,
+  {M, _, _} = MFArgs,
+  case M of
+    ets -> 
+      logically_equal_aux(tuple_to_list(EventInfo#builtin_event{extra = different_ref}),
+                          tuple_to_list(NewEventInfo#builtin_event{extra = different_ref}));
+    _ ->
+      logically_equal_aux(tuple_to_list(EventInfo), tuple_to_list(NewEventInfo))
+  end;
 logically_equal_aux(Term, NewTerm)
   when is_tuple(Term) andalso is_tuple(NewTerm) ->
   logically_equal_aux(tuple_to_list(Term), tuple_to_list(NewTerm));
@@ -2017,6 +2096,10 @@ logically_equal_aux(Fun, NewFun)
   erlang:fun_info(Fun, name) =:= erlang:fun_info(NewFun, name)
     andalso erlang:fun_info(Fun, module) =:= erlang:fun_info(NewFun, module)
     andalso erlang:fun_info(Fun, arity) =:= erlang:fun_info(NewFun, arity);
+%% TODO remove this
+%% logically_equal_aux(Ref, NewRef)
+%%   when is_reference(Ref) andalso is_reference(NewRef) ->
+%%   true;
 logically_equal_aux(Term, NewTerm) ->
   Term =:= NewTerm.
 
@@ -2921,15 +3004,22 @@ make_state_transferable(State) ->
      origin = Origin,
      trace = Trace
     } = State,
-  #reduced_scheduler_state{
+  ets:new(ets_transferable, [named_table, public]),
+  TransferableTrace =
+    [make_trace_state_transferable(TraceState) || TraceState <- Trace],
+  TransferableState =
+    #reduced_scheduler_state{
      backtrack_size = size_of_backtrack(Trace),
      interleaving_id = InterleavingId,
      last_scheduled = pid_to_list(LastScheduled),
      need_to_replay = NeedToReplay,
      origin = Origin,
+     processes_ets_tables = ets:tab2list(ets_transferable),
      safe = true,
-     trace = [make_trace_state_transferable(TraceState) || TraceState <- Trace]
-    }.
+     trace = TransferableTrace
+    },
+  ets:delete(ets_transferable),
+  TransferableState.
 
 make_trace_state_transferable(TraceState) ->
   #trace_state{ 
@@ -3078,6 +3168,7 @@ make_event_info_transferable(#builtin_event{} = BuiltinEvent) ->
      trapping = Trapping
     } = BuiltinEvent,
   {Module, Fun, Args} = MFArgs,
+  maybe_new_ets_table(BuiltinEvent),
   TranferableArgs = [make_term_transferable(Arg) || Arg <- Args],
   Transferable = #builtin_event_transferable{
      actor = pid_to_list(Actor),
@@ -3143,6 +3234,12 @@ make_event_info_transferable(#exit_event{} = ExitEvent) ->
      trapping = Trapping
     }.
 
+maybe_new_ets_table(#builtin_event{mfargs = {ets, new, Args}} = BuiltinEvent) ->
+  ets:insert(ets_transferable, {Extra, make_term_transferable(Args)});
+maybe_new_ets_table(_) ->
+  ok.
+
+
 make_wakeup_tree_transferable([], _) -> [];
 make_wakeup_tree_transferable([Head|Rest], TraceStateOwnership) ->
   #backtrack_entry{
@@ -3172,18 +3269,41 @@ revert_state(PreviousState, ReducedState) ->
      last_scheduled = LastScheduled,
      need_to_replay = NeedToReplay,
      origin = Origin,
+     processes_ets_tables = ProcessesEtsTables
      safe = Safe, %% safe meens that this fragment has not been distributed
      %% TODO maybe remove this
      trace = Trace
     } = ReducedState,
-  PreviousState#scheduler_state{
+  ets:new(ets_transferable, [named_table, public]),
+  maybe_create_new_tables(ProcessesEtsTables),
+  NewState =
+    PreviousState#scheduler_state{
     interleaving_id = InterleavingId,
     last_scheduled = list_to_pid(LastScheduled),
     need_to_replay = NeedToReplay,
     origin = Origin,
     trace = [revert_trace_state(TraceState, Safe) || TraceState <- Trace]
-   }.
+   },
+  ets:delete(ets_transferable),
+  NewState.
 
+maybe_create_new_table([]) ->
+  ok;
+maybe_create_new_table([{OldTid, Args}|Rest]) ->
+  case node(OldTid) =:= node() of
+    true ->
+      %% no need to create new ets_table
+      ok;
+    false ->
+      %% create new ets_table
+      [Name, Options] = revert_term(Args),
+      NoNameOptions = [O || O <- Options, O =/= named_table],
+      NewTid = ets:new(Name, NoNameOptions ++ [public]),
+      %% true = ets:give_away(T, Scheduler, given_to_scheduler), TODO remove
+      ets:insert(ets_transferable, {OldTid, NewTid}),
+      maybe_create_new_tables(Rest)       
+  end.
+        
 revert_trace_state(TraceState, Safe) ->
   #trace_state_transferable{ 
      actors = Actors,
@@ -3328,7 +3448,7 @@ revert_event_info(#builtin_event_transferable{} = BuiltinEvent) ->
   RevertedArgs = [revert_term(Arg) || Arg <- Args],
   #builtin_event{
      actor = list_to_pid(Actor),
-     extra = Extra,
+     extra = maybe_change_extra(BuiltinEvent),
      exiting = Exiting,
      mfargs = {Module, Fun, RevertedArgs}, %% TODO check if I need to fix this as well
      result = revert_term(Result), %% TODO check if I need to fix this as well
@@ -3381,6 +3501,21 @@ revert_event_info(#exit_event_transferable{} = ExitEvent) ->
      stacktrace = StackTrace, %% maybe need to check this as well
      trapping = Trapping
     }.
+
+maybe_change_extra(
+  #builtin_event_transferable{
+     extra = OldTid,
+     mfargs = {ets, _, _}}
+  = _)
+  when is_reference(OldTid) ->
+  case node(OldTid) =:= node() of
+    true ->
+      OldTid;
+    false ->
+      ets:lookup_element(ets_transferable, OldTid, 2)
+  end;
+maybe_change_extra(_) ->
+   BuiltinEvent#builtin_event_transferable.extra.
 
 revert_wakeup_tree([]) -> [];
 revert_wakeup_tree([Head|Rest]) ->

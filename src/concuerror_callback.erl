@@ -386,11 +386,15 @@ run_built_in(erlang, exit, 2, [Pid, Reason],
   ?badarg_if_not(is_pid(Pid)),
   case EventInfo of
     %% Replaying...
-    #builtin_event{result = OldResult} ->
+    %% whit pseudo replay
+    #builtin_event{result = OldResult}
+      when not EventInfo#builtin_event.actual_replay ->
       {_, MsgInfo} = get_message_cnt(Info),
       {OldResult, MsgInfo};
     %% New event...
-    undefined ->
+    %% OR Actual replay
+    Other ->
+      true = Other =:= undefined orelse EventInfo#builtin_event.actual_replay,
       Content =
         case Event#event.location =/= exit andalso Reason =:= kill of
           true -> kill;
@@ -466,8 +470,16 @@ run_built_in(erlang, link, 1, [Pid], Info) ->
             case EventInfo of
               %% Replaying...
               #builtin_event{} ->
-                {_, MsgInfo} = get_message_cnt(Info),
-                MsgInfo;
+                case EventInfo#builtin_event.actual_replay of
+                  false ->
+                    %% Pseudo Replay
+                    {_, MsgInfo} = get_message_cnt(Info),
+                    MsgInfo;
+                  true ->
+                    %% Actual Replay
+                    Signal = make_exit_signal(Pid, noproc),
+                    make_message(Info, message, Signal, self())
+                end;                    
               %% New event...
               undefined ->
                 Signal = make_exit_signal(Pid, noproc),
@@ -480,6 +492,7 @@ run_built_in(erlang, link, 1, [Pid], Info) ->
 run_built_in(erlang, make_ref, 0, [], Info) ->
   #concuerror_info{event = #event{event_info = EventInfo}} = Info,
   {MaybeRef, NewInfo} = get_ref(Info),
+  %% TODO fix this !!!! This is not supposed to work
   case EventInfo of
     %% Replaying...
     #builtin_event{result = MaybeRef} -> ok;
@@ -503,6 +516,7 @@ run_built_in(erlang, monitor, 2, [Type, InTarget], Info) ->
       _ -> error(badarg)
     end,
   {Ref, NewInfo} = get_ref(Info),
+  %% TODO fix this !!! this is not supposed to work
   case EventInfo of
     %% Replaying...
     #builtin_event{result = Ref} -> ok;
@@ -532,6 +546,7 @@ run_built_in(erlang, monitor, 2, [Type, InTarget], Info) ->
       true -> NewInfo;
       false ->
         case EventInfo of
+          %% TODO fix this !!! this is not supposed to work
           %% Replaying...
           #builtin_event{} ->
             {_, MsgInfo} = get_message_cnt(NewInfo),
@@ -701,6 +716,8 @@ run_built_in(erlang, SendAfter, 3, [0, Dest, Msg], Info)
   case EventInfo of
     %% Replaying...
     #builtin_event{result = Ref} -> ok;
+    %% Actual Replay
+    #builtin_event{actual_replay = true} -> ok;
     %% New event...
     undefined -> ok
   end,
@@ -728,10 +745,13 @@ run_built_in(erlang, SendAfter, 3, [Timeout, Dest, Msg], Info)
   {Pid, FinalInfo} =
     case EventInfo of
       %% Replaying...
-      #builtin_event{result = Ref, extra = OldPid} ->
+      #builtin_event{result = Ref, extra = OldPid}
+        when not EventInfo#builtin_event.actual_replay ->
         {OldPid, NewInfo#concuerror_info{extra = OldPid}};
       %% New event...
-      undefined ->
+      %% OR Actual replay
+      Other ->
+        true = Other =:= undefined orelse EventInfo#builtin_event.actual_replay,
         Symbol = "Timer " ++ erlang:ref_to_list(Ref),
         P =
           case
@@ -796,7 +816,8 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
       %% Replaying...
       %% TODO : fix replaying by either always putting an event as undefined when replaying on a different scheduler
       %%                         or transfering Process tables and enabling new processes 
-      #builtin_event{result = OldResult} ->
+      #builtin_event{result = OldResult}
+        when not EventInfo#builtin_event.actual_replay ->
         case HasMonitor of
           false -> ok;
           Mon ->
@@ -805,7 +826,9 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
         end,
         {OldResult, NewInfo};
       %% New event...
-      undefined ->
+      %% OR Actual replay
+      Other ->
+        true = Other =:= undefined orelse EventInfo#builtin_event.actual_replay,
         PassedInfo = reset_concuerror_info(NewInfo),
         ?debug_flag(?spawn, {Parent, spawning_new, PassedInfo}),
         ChildSymbol = io_lib:format("~s.~w",[ParentSymbol, ChildId]),
@@ -877,8 +900,18 @@ run_built_in(erlang, Send, 2, [Recipient, Message], Info)
   case EventInfo of
     %% Replaying...
     #builtin_event{result = OldResult} ->
-      {_, MsgInfo} = get_message_cnt(Info),
-      {OldResult, MsgInfo#concuerror_info{extra = Extra}};
+      case EventInfo#builtin_event.actual_replay of
+        false ->
+          %% Pseudo replay
+          {_, MsgInfo} = get_message_cnt(Info),
+          {OldResult, MsgInfo#concuerror_info{extra = Extra}};
+        true ->
+          %% Actual replay
+          ?debug_flag(?send, {send, Recipient, Message}),
+          MsgInfo = make_message(Info, message, Message, Pid),
+          ?debug_flag(?send, {send, successful}),
+          {Message, MsgInfo#concuerror_info{extra = Extra}}
+      end;
     %% New event...
     undefined ->
       ?debug_flag(?send, {send, Recipient, Message}),
@@ -951,7 +984,19 @@ run_built_in(ets, new, 2, [Name, Options], Info) ->
   Tid =
     case EventInfo of
       %% Replaying...
-      #builtin_event{extra = Extra} -> Extra;
+      #builtin_event{extra = Extra} ->
+        case EventInfo#builtin_event.actual_replay of
+          false ->
+            %% Pseudo Replay
+            Extra;
+          true ->
+            %% Actual Replay
+            %% TODO make sure that I fill with tables that I do not empty or delete
+            %% T = ets:new(Name, NoNameOptions ++ [public]),
+            %% true = ets:give_away(T, Scheduler, given_to_scheduler),
+            %% T
+            Extra
+        end;
       %% New event...
       undefined ->
         %% Looks like the last option is the one actually used.
@@ -976,7 +1021,17 @@ run_built_in(ets, new, 2, [Name, Options], Info) ->
       false ->
         case EventInfo of
           %% Replaying...
-          #builtin_event{result = R} -> R;
+          #builtin_event{result = R} ->
+            case EventInfo#builtin_event.actual_replay of
+              false ->
+                %% Pseudo replay
+                R;
+              true ->
+                %% Actual replay
+                CurrentTid = ets:lookup(EtsTables, tid, 2),
+                ets:insert(EtsTables, tid, max(R, CurrentTid)),
+                R
+            end;
           %% New event...
           undefined ->
             ets:update_counter(EtsTables, tid, 1)
@@ -1047,8 +1102,16 @@ run_built_in(ets, give_away, 3, [Name, Pid, GiftData], Info) ->
     case EventInfo of
       %% Replaying. Keep original message
       #builtin_event{} ->
-        {_Id, MsgInfo} = get_message_cnt(Info),
-        MsgInfo;
+        case EventInfo#builtin_event.actual_replay of
+          %% Pseudo replay
+          false ->
+            {_Id, MsgInfo} = get_message_cnt(Info),
+            MsgInfo;
+          %% Actual replay
+          true ->
+            Data = {'ETS-TRANSFER', Tid, Self, GiftData},
+            make_message(Info, message, Data, Pid)
+        end;
       %% New event...
       undefined ->
         Data = {'ETS-TRANSFER', Tid, Self, GiftData},
@@ -1092,7 +1155,13 @@ maybe_reuse_old(Module, Name, _Arity, Args, Info) ->
   Res =
     case EventInfo of
       %% Replaying...
-      #builtin_event{result = OldResult} -> OldResult;
+      #builtin_event{result = OldResult} ->
+        case EventInfo#builtin_event.actual_replay of
+          false ->
+            OldResult;
+          true ->
+            erlang:apply(Module, Name, Args)
+        end;
       %% New event...
       undefined -> erlang:apply(Module, Name, Args)
     end,

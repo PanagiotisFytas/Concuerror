@@ -183,7 +183,7 @@
           lists:max(
             [list_to_pid(PidList) || PidList <- PidLists]
            ))).
--define(number_of_schedulers, 1).
+-define(number_of_schedulers, 3).
 -define(balancing_limit, 1).
 -define(fragmentation_val, 2*?number_of_schedulers).
 -define(time_unit, milli_seconds).
@@ -236,7 +236,8 @@
           mfargs           :: mfargs(),
           result           :: term(),
           status = ok      :: 'ok' | {'crashed', term()} | 'unknown',
-          trapping = false :: boolean()
+          trapping = false :: boolean(),
+          actual_replay = false   :: boolean()
          }).
 
 -type builtin_event() :: #builtin_event{}.
@@ -321,7 +322,8 @@
           mfargs           :: mfargs(),
           result           :: term(),
           status = ok      :: 'ok' | {'crashed', term()} | 'unknown',
-          trapping = false :: boolean()
+          trapping = false :: boolean(),
+          parallel_replay = false   :: boolean()
          }).
 
 -type builtin_event_transferable() :: #builtin_event_transferable{}.
