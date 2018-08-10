@@ -386,7 +386,7 @@ run_built_in(erlang, exit, 2, [Pid, Reason],
   ?badarg_if_not(is_pid(Pid)),
   case EventInfo of
     %% Replaying...
-    %% whit pseudo replay
+    %% with pseudo replay
     #builtin_event{result = OldResult}
       when not EventInfo#builtin_event.actual_replay ->
       {_, MsgInfo} = get_message_cnt(Info),
