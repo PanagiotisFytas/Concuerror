@@ -3301,7 +3301,13 @@ make_wakeup_tree_transferable([Head|Rest], _TraceStateOwnership) ->
        conservative = Conservative,
        event = make_event_tranferable(Event),
        origin = Origin,
-       ownership = Ownership, %% or _TraceStateOwnership,
+       ownership = 
+         case _TraceStateOwnership of
+           true ->
+             owned;
+           false ->
+             Ownership
+         end, %%Ownership or _TraceStateOwnership,
        wakeup_tree = make_wakeup_tree_transferable(WUT, _TraceStateOwnership) %% this make sense for optimal, maybe need to change
       },
   [NewHead|make_wakeup_tree_transferable(Rest, _TraceStateOwnership)].
