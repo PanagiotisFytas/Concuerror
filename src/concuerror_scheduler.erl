@@ -433,7 +433,7 @@ own_next_interleaving(#scheduler_state{trace = [TraceState|_]} = _State) ->
           %% TODO :
           %% this should be made impossible by filtering (or sorting) not_owned entries
           %% in the find_prefix function
-          exit(impossible)
+          exit(impossible4)
       end
   end.        
 
@@ -481,15 +481,38 @@ size_of_backtrack([TraceState|Rest]) ->
   size_of_backtrack_aux(TraceState#trace_state.wakeup_tree) + size_of_backtrack(Rest).
 
 size_of_backtrack_aux([]) -> 0;
-size_of_backtrack_aux([_BacktrackEntry|Rest]) ->
-  1
-  %  + size_of_backtrack_aux(BacktrackEntry#backtrack_entry.wakeup_tree)
+size_of_backtrack_aux([BacktrackEntry|Rest]) ->
+  Count =
+    case BacktrackEntry#backtrack_entry.ownership of
+      owned ->
+        1;
+      not_owned ->
+        0;
+      disputed ->
+        1
+    end,
+  Count
+  %% + size_of_backtrack_aux(BacktrackEntry#backtrack_entry.wakeup_tree)
     + size_of_backtrack_aux(Rest).
 
 size_of_backtrack_transferable([]) -> 0;
 size_of_backtrack_transferable([TraceState|Rest]) ->
-  size_of_backtrack_aux(TraceState#trace_state_transferable.wakeup_tree) + size_of_backtrack_transferable(Rest).
+  size_of_backtrack_transferable_aux(TraceState#trace_state_transferable.wakeup_tree) + size_of_backtrack_transferable(Rest).
 
+size_of_backtrack_transferable_aux([]) -> 0;
+size_of_backtrack_transferable_aux([BacktrackEntry|Rest]) ->
+  Count =
+    case BacktrackEntry#backtrack_entry_transferable.ownership of
+      owned ->
+        1;
+      not_owned ->
+        0;
+      disputed ->
+        1
+    end,
+  Count
+  %% + size_of_backtrack_aux(BacktrackEntry#backtrack_entry.wakeup_tree)
+    + size_of_backtrack_transferable_aux(Rest).
 
 %% %% all this needs to change this is not anymore the work of scheduler
 %% unload_work(State) ->
@@ -685,6 +708,47 @@ get_next_event(
   NewState =
     add_error({depth_bound, Bound - 1}, discard_last_trace_state(State)),
   {none, NewState};
+get_next_event(#scheduler_state{
+                  logger = _Logger,
+                  parallel = Parallel,
+                  trace = [Last|_]
+                 } = State) 
+  when Parallel ->
+  #trace_state{index = _I, wakeup_tree = WakeupTree} = Last,
+  SortFun =
+    fun(A, B) ->
+        #backtrack_entry{ownership = OwnershipA} = A,
+        case OwnershipA of
+          owned ->
+            true;
+          not_owned ->
+            false;
+          disputed ->
+            #backtrack_entry{ownership = OwnershipB} = B,
+            case OwnershipB of
+              owned ->
+                false;
+              not_owned ->
+                true;
+              disputed ->
+                true
+            end
+        end
+    end,
+  SortedWakeupTree = lists:sort(SortFun, WakeupTree),
+  case SortedWakeupTree of
+    [] ->
+      Event = #event{label = make_ref()},
+      get_next_event(Event, State);
+    [#backtrack_entry{event = Event, origin = N, ownership = owned}|_] ->
+      ?debug(
+         _Logger,
+         "New interleaving detected in ~p (diverge @ ~p)~n",
+         [N, _I]),
+      get_next_event(Event, State#scheduler_state{origin = N});
+    _ ->
+      exit(impossible5)
+  end;
 get_next_event(#scheduler_state{logger = _Logger, trace = [Last|_]} = State) ->
   #trace_state{index = _I, wakeup_tree = WakeupTree} = Last,
   case WakeupTree of
@@ -1455,7 +1519,19 @@ update_trace(
             true ->
               case UseReceivePatterns of
                 false ->
-                  {insert_wakeup_optimal(SleepSet, Wakeup, NotDep, Bound, Origin), false};
+                  case State#scheduler_state.parallel of
+                    false ->
+                      {insert_wakeup_optimal(SleepSet, Wakeup, NotDep, Bound, Origin), false};
+                    true ->
+                      TraceStateOwnership =
+                        case TraceState#trace_state.ownership of
+                          false ->
+                            none;
+                          true ->
+                            owned
+                          end,
+                      {insert_wakeup_optimal_parallel(SleepSet, Wakeup, NotDep, Bound, Origin, TraceStateOwnership), false}
+                    end;
                 true ->
                   V =
                     case ObserverInfo =:= no_observer of
@@ -1684,6 +1760,12 @@ insert_wakeup_optimal(SleepSet, Wakeup, V, Bound, Origin) ->
     false -> insert_wakeup(Wakeup, V, Bound, Origin)
   end.
 
+insert_wakeup_optimal_parallel(SleepSet, Wakeup, V, Bound, Origin, Ownership) ->
+  case has_initial(SleepSet, V) of
+    true -> skip;
+    false -> insert_wakeup_parallel(Wakeup, V, Bound, Origin, Ownership)
+  end.
+
 has_initial([Event|Rest], V) ->
   case check_initial(Event, V) =:= false of
     true -> has_initial(Rest, V);
@@ -1731,10 +1813,83 @@ insert_wakeup([Node|Rest],  NotDep,  Bound,  Origin) ->
       end
   end.
 
+insert_wakeup_parallel(          _, _NotDep,  Bound, _Origin, _) when Bound < 0 ->
+  over_bound;
+insert_wakeup_parallel(         [],  NotDep, _Bound,  Origin, Ownership) ->
+  backtrackify(NotDep, Origin, Ownership);
+insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
+  #backtrack_entry{
+     event = Event,
+     origin = M,
+     ownership = NodeOwnership,
+     wakeup_tree = Deeper
+    } = Node,
+  Ownership =
+    case MaybeOwnership of
+      none ->
+        case NodeOwnership of
+          owned ->
+            owned;
+          not_owned ->
+            %% disputed;
+            owned;
+          disputed ->
+            disputed
+        end;
+      _ ->
+        MaybeOwnership
+    end,  
+  case check_initial(Event, NotDep) of
+    false ->
+      NewBound =
+        case is_integer(Bound) of
+          true -> Bound - 1;
+          false -> Bound
+        end,
+      case insert_wakeup_parallel(Rest, NotDep, NewBound, Origin, MaybeOwnership) of
+        Special
+          when
+            Special =:= skip;
+            Special =:= over_bound -> Special;
+        NewTree -> [Node|NewTree]
+      end;
+    NewNotDep ->
+      case Deeper =:= [] of
+        true  -> skip;
+        false ->
+          case insert_wakeup_parallel(Deeper, NewNotDep, Bound, Origin, Ownership) of
+            Special
+              when
+                Special =:= skip;
+                Special =:= over_bound -> Special;
+            NewTree ->
+              Entry =
+                #backtrack_entry{
+                   event = Event,
+                   origin = M,
+                   ownership = Ownership,
+                   wakeup_tree = NewTree},
+              [Entry|Rest]
+          end
+      end
+  end.
+
 backtrackify(Seq, Cause) ->
   Fold =
     fun(Event, Acc) ->
         [#backtrack_entry{event = Event, origin = Cause, wakeup_tree = Acc}]
+    end,
+  lists:foldr(Fold, [], Seq).
+
+backtrackify(Seq, Cause, Ownership) ->
+  Fold =
+    fun(Event, Acc) ->
+        [#backtrack_entry{
+            event = Event,
+            origin = Cause,
+            wakeup_tree = Acc,
+            ownership = Ownership
+           }]
     end,
   lists:foldr(Fold, [], Seq).
 
@@ -1843,10 +1998,18 @@ add_conservative([TraceState|Rest], Actor, Clock, Candidates, State, Acc) ->
 has_more_to_explore(State) ->
   #scheduler_state{
      estimator = Estimator,
+     parallel = Parallel,
+     dpor = DPOR,
      scheduling_bound_type = SchedulingBoundType,
      trace = Trace
     } = State,
-  TracePrefix = find_prefix(Trace, SchedulingBoundType),
+  TracePrefix =
+    case Parallel and (DPOR =:= optimal) or (DPOR =:= source) of
+      false ->
+        find_prefix(Trace, SchedulingBoundType);
+      true ->
+        find_prefix_parallel_optimal(Trace)
+    end,
   case TracePrefix =:= [] of
     true -> {false, State#scheduler_state{trace = []}};
     false ->
@@ -1873,6 +2036,46 @@ find_prefix(Trace, SchedulingBoundType) ->
         false -> Trace
       end
   end.
+
+find_prefix_parallel_optimal([]) -> [];
+find_prefix_parallel_optimal([TraceState|Rest]) ->
+  #trace_state{wakeup_tree = Tree} = TraceState,
+  %% owned < disputed < not_owned
+  case Tree =:= [] of
+    true ->
+      find_prefix_parallel_optimal(Rest);
+    false ->
+      SortFun =
+        fun(A, B) ->
+            #backtrack_entry{ownership = OwnershipA} = A,
+            case OwnershipA of
+              owned ->
+                true;
+              not_owned ->
+                false;
+              disputed ->
+                #backtrack_entry{ownership = OwnershipB} = B,
+                case OwnershipB of
+                  owned ->
+                    false;
+                  not_owned ->
+                    true;
+                  disputed ->
+                    true
+                end
+            end
+        end,
+      SortedTree = lists:sort(SortFun, Tree),
+      [H|_] = SortedTree,
+      case H#backtrack_entry.ownership =:= not_owned of
+        true ->
+          %% no owned or disputed backtrack entries
+          find_prefix_parallel_optimal(Rest);
+        false ->
+          [TraceState#trace_state{wakeup_tree = SortedTree}|Rest]
+      end
+  end.
+
 
 replay(#scheduler_state{need_to_replay = false} = State) ->
   State;
@@ -2451,7 +2654,7 @@ update_execution_tree_aux(
   %% modified accordingly and they are inserted in the wakeup_tree of the central
   %% tree.
   {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT, [], [], []),
-  NotOwnedWuT = [], %% for the time being, this should hold true for source
+  %NotOwnedWuT = [], %% for the time being, this should hold true for source
   %% TODO : remove this check
   %% ok = assert_equal_wut(OwnedWuT, OldNextWuT), <- this assertion is only correct if
   %% the next events  are logically equal (else OwnedWuT could be smaller than OldNextWuT)
@@ -2463,8 +2666,8 @@ update_execution_tree_aux(
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
       %% sleep_set =  NotOwnedEvents ++ Sleep,
-      done = NextDone ++ NewNotOwnedEvents,
-      wakeup_tree = OwnedWuT ++ NewOwnedWuT
+      %% done = NextDone ++ NewNotOwnedEvents,
+      wakeup_tree = OwnedWuT ++ NewOwnedWuT ++ NotOwnedWuT ++ NewNotOwnedWuT
      },
   case logically_equal(NextActiveEvent, OldNextActiveEvent) of
     true ->
@@ -2547,6 +2750,11 @@ update_execution_tree_aux(
       %% ReducedWuT = get_reduced_wut_from_done(NextDone, WuT),
       FinishedWuT = get_finished_wut(OldNextWuT, NextWuT, NextActiveEvent),
       {NewFinishedChilren, ReducedWuT} = get_finished_children_from_wut(FinishedWuT, WuT),
+      Pr =
+        fun(Elem) ->
+            Elem#backtrack_entry_transferable.ownership =/= owned
+        end,
+      false = lists:any(Pr, FinisedWuT), %% TODO remove this assertion
       NewActiveChild = initialize_execution_tree_aux([NextTraceState|Rest]),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
@@ -2718,7 +2926,8 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
     end,
   %% I know NextWuT has been completely explored so I filter its entries from
   %% the wakeup_tree of the node
-  {NewFinishedChilren, UpdatedWuT} = get_finished_children_from_wut(NextWuT, WuT),
+  OwnedNextWuT = [E || E <- NextWuT, E#backtrack_entry_transferable.ownership =:= owned],
+  {NewFinishedChilren, UpdatedWuT} = get_finished_children_from_wut(OwnedNextWuT, WuT),
   case UpdatedWuT =:= [] andalso UpdatedActiveChildren =:= [] of
     true ->
       %% this node is done, everything underneath it is explored
@@ -2841,58 +3050,111 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
      sleep_set = SleepSet,
      done = Done
     } = TraceState,
-  [H|T] = Done,
-  Eventify = [Entry#backtrack_entry_transferable.event || Entry <- WuT],
-  [UnloadedEntry|RestBacktrack] = WuT,
-  [UnloadedBacktrackEvent|RestBacktrackEvents] = Eventify,
-  UpdatedTraceState =
-    TraceState#trace_state_transferable{
-      wakeup_tree = RestBacktrack,
-      sleep_set = [UnloadedBacktrackEvent|SleepSet],
-      done = [H, UnloadedBacktrackEvent|T]
-     },
-  NewFragmentTraceState =
-    TraceState#trace_state_transferable{
-      %% wakeup_tree = [UnloadedEntry],
-      wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}],
-      sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
-      done = [H|RestBacktrackEvents] ++ T
-     },
-  NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
-  distribute_interleavings_aux([UpdatedTraceState|Rest],
-                               RevTracePrefix,
-                               N-1,
-                               [NewFragmentTrace|FragmentTraces],
-                               source);
+  %% [H|T] = Done,
+  %% Eventify = [Entry#backtrack_entry_transferable.event || Entry <- WuT],
+  %% [UnloadedEntry|RestBacktrack] = WuT,
+  %% [UnloadedBacktrackEvent|RestBacktrackEvents] = Eventify,
+  %% UpdatedTraceState =
+  %%   TraceState#trace_state_transferable{
+  %%     wakeup_tree = RestBacktrack,
+  %%     sleep_set = [UnloadedBacktrackEvent|SleepSet],
+  %%     done = [H, UnloadedBacktrackEvent|T]
+  %%    },
+  %% NewFragmentTraceState =
+  %%   TraceState#trace_state_transferable{
+  %%     %% wakeup_tree = [UnloadedEntry],
+  %%     wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}],
+  %%     sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
+  %%     done = [H|RestBacktrackEvents] ++ T
+  %%    },
+  %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
+  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(WuT, [], [], []),
+  DisputedWuT = [],
+  case OwnedWuT =:= [] of
+    true ->
+      distribute_interleavings_aux(Rest, [TraceState|RevTracePrefix], N, FragmentTraces, source);
+    false ->
+      [GivenEntry|RestEntries] = OwnedWuT,
+      UpdatedTraceState =
+        TraceState#trace_state_transferable{
+          wakeup_tree = RestEntries ++ [GivenEntry#backtrack_entry_transferable{ownership = not_owned}|NotOwnedWuT]
+         },
+      NotOwnedRest = [E#backtrack_entry_transferable{ownership = not_owned} || E <- RestEntries],
+      NewFragmentTraceState =
+        TraceState#trace_state_transferable{
+          %% wakeup_tree = [UnloadedEntry],
+          wakeup_tree = [GivenEntry] ++ NotOwnedRest ++ NotOwnedWuT 
+         },
+      NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
+      distribute_interleavings_aux([UpdatedTraceState|Rest],
+                                   RevTracePrefix,
+                                   N-1,
+                                   [NewFragmentTrace|FragmentTraces],
+                                   source)
+  end;
 distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTraces, optimal) ->
   #trace_state_transferable{
      wakeup_tree = WuT,
      sleep_set = SleepSet,
      done = Done
     } = TraceState,
-  [H|T] = Done,
-  Eventify = [Entry#backtrack_entry_transferable.event || Entry <- WuT],
-  [UnloadedEntry|RestBacktrack] = WuT,
-  [UnloadedBacktrackEvent|RestBacktrackEvents] = Eventify,
-  UpdatedTraceState =
-    TraceState#trace_state_transferable{
-      wakeup_tree = RestBacktrack,
-      sleep_set = [UnloadedBacktrackEvent|SleepSet],
-      done = [H, UnloadedBacktrackEvent|T]
-     },
-  NewFragmentTraceState =
-    TraceState#trace_state_transferable{
-      %% wakeup_tree = [UnloadedEntry],
-      wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}],
-      sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
-      done = [H|RestBacktrackEvents] ++ T
-     },
-  NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
-  distribute_interleavings_aux([UpdatedTraceState|Rest],
-                               RevTracePrefix,
-                               N-1,
-                               [NewFragmentTrace|FragmentTraces],
-                               optimal).
+  %% [H|T] = Done,
+  %% Eventify = [Entry#backtrack_entry_transferable.event || Entry <- WuT],
+  %% [UnloadedEntry|RestBacktrack] = WuT,
+  %% [UnloadedBacktrackEvent|RestBacktrackEvents] = Eventify,
+  %% UpdatedTraceState =
+  %%   TraceState#trace_state_transferable{
+  %%     wakeup_tree = RestBacktrack,
+  %%     sleep_set = [UnloadedBacktrackEvent|SleepSet],
+  %%     done = [H, UnloadedBacktrackEvent|T]
+  %%    },
+  %% NewFragmentTraceState =
+  %%   TraceState#trace_state_transferable{
+  %%     %% wakeup_tree = [UnloadedEntry],
+  %%     wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}],
+  %%     sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
+  %%     done = [H|RestBacktrackEvents] ++ T
+  %%    },
+  %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
+  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(WuT, [], [], []),
+  DisputedWuT = [],
+  case OwnedWuT =:= [] of
+    true ->
+      distribute_interleavings_aux(Rest, [TraceState|RevTracePrefix], N, FragmentTraces, optimal);
+    false ->
+      [GivenEntry|RestEntries] = OwnedWuT,
+      UpdatedTraceState =
+        TraceState#trace_state_transferable{
+          wakeup_tree = RestEntries ++ [fix_wut_ownership(GivenEntry, not_owned)|NotOwnedWuT]
+         },
+      NotOwnedRest = fix_wut_ownership(RestEntries, not_owned),
+      NewFragmentTraceState =
+        TraceState#trace_state_transferable{
+          %% wakeup_tree = [UnloadedEntry],
+          wakeup_tree = [GivenEntry] ++ NotOwnedRest ++ NotOwnedWuT 
+         },
+      NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
+      distribute_interleavings_aux([UpdatedTraceState|Rest],
+                                   RevTracePrefix,
+                                   N-1,
+                                   [NewFragmentTrace|FragmentTraces],
+                                   optimal)
+  end.
+
+fix_wut_ownership([], _) -> [];
+fix_wut_ownership(
+  [#backtrack_entry_transferable{wakeup_tree = WuT} = Entry|Rest],
+  Ownership) ->
+  FixedEntry = Entry#backtrack_entry_transferable{
+    ownership = Ownership,
+    wakeup_tree = fix_wut_ownership(WuT, Ownership)
+   },
+  [FixedEntry|fix_wut_ownership(Rest, Ownership)];
+fix_wut_ownership(#backtrack_entry_transferable{wakeup_tree = WuT} = Entry, Ownership) ->
+  Entry#backtrack_entry_transferable{
+    ownership = Ownership,
+    wakeup_tree = fix_wut_ownership(WuT, Ownership)
+   }.
 
 %% distribute_wut(_WuT, 0, DistributedWuTs) ->
 %%   DistributedWuTs;
@@ -3306,7 +3568,7 @@ maybe_new_ets_table(_) ->
 
 
 make_wakeup_tree_transferable([], _) -> [];
-make_wakeup_tree_transferable([Head|Rest], _TraceStateOwnership) ->
+make_wakeup_tree_transferable([Head|Rest], TraceStateOwnership) ->
   #backtrack_entry{
      conservative = Conservative,
      event = Event,
@@ -3320,15 +3582,16 @@ make_wakeup_tree_transferable([Head|Rest], _TraceStateOwnership) ->
        event = make_event_tranferable(Event),
        origin = Origin,
        ownership = 
-         case _TraceStateOwnership of
+         %% TODO: this will not be completely correct, FIX it!!!!
+         case TraceStateOwnership of
            true ->
              owned;
            false ->
              Ownership
          end, %%Ownership or _TraceStateOwnership,
-       wakeup_tree = make_wakeup_tree_transferable(WUT, _TraceStateOwnership) %% this make sense for optimal, maybe need to change
+       wakeup_tree = make_wakeup_tree_transferable(WUT, TraceStateOwnership) %% this make sense for optimal, maybe need to change
       },
-  [NewHead|make_wakeup_tree_transferable(Rest, _TraceStateOwnership)].
+  [NewHead|make_wakeup_tree_transferable(Rest, TraceStateOwnership)].
 
 %%------------------------------------------------------------------------------
 %% Tranferable state -> Playable State
