@@ -347,7 +347,7 @@ explore_scheduling(State) ->
   LogState = log_trace(UpdatedState),
   RacesDetectedState = plan_more_interleavings(LogState),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
-  io:fwrite("State ~n~p~n", [NewState]),
+  %% io:fwrite("State ~n~p~n", [NewState]), %% TODO remove
   case HasMore of
     true -> explore_scheduling(NewState);
     false -> ok%exit(UpdatedState) %% TODO put ok
