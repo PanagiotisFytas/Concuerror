@@ -2470,7 +2470,14 @@ update_execution_tree_aux(
     true ->
       %% Recursively keep modifying the tree
       %% Find the subtree that needs to be modified
-      {Prefix, [NextChild|Suffix]} = split_active_children(NextActiveEvent, ActiveChildren),
+      {Prefix, [NextChild|Suffix]} = 
+        try 
+          {P, [NC|S]} = split_active_children(NextActiveEvent, ActiveChildren),
+          {P, [NC|S]}
+        catch _:_ ->
+            io:fwrite("NextActiveEvent~p~nActiveChildren~p~n", [NextActiveEvent, ActiveChildren]),
+            exit(fok)
+        end,
       %% TODO there is a bug here
       %% try split_active_children(NextActiveEvent, ActiveChildren)
       %% catch _:_ ->
@@ -2538,7 +2545,8 @@ update_execution_tree_aux(
       %% of the backtrack of the initial fragment that were explored
       %% NewFinishedChilren = get_finished_children_from_done(NextFinishedEvents, WuT),
       %% ReducedWuT = get_reduced_wut_from_done(NextDone, WuT),
-      {NewFinishedChilren, ReducedWuT} = get_finished_children_from_wut(OldNextWuT -- NextWuT, WuT),
+      FinishedWuT = get_finished_wut(OldNextWuT, NextWuT, NextActiveEvent),
+      {NewFinishedChilren, ReducedWuT} = get_finished_children_from_wut(FinishedWuT, WuT),
       NewActiveChild = initialize_execution_tree_aux([NextTraceState|Rest]),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
@@ -2549,6 +2557,16 @@ update_execution_tree_aux(
          },
       {[TraceState, UpdatedNextTraceState|Rest], UpdatedExecutionTree, length(NewNotOwnedEvents)}
   end.
+
+get_finished_wut(OldWuT, WuT, ActiveEvent) ->
+  ActiveActor = ActiveEvent#event_transferable.actor,
+  Pred =
+    fun(Entry) ->
+        Event = Entry#backtrack_entry_transferable.event,
+        Actor = Event#event_transferable.actor,
+        Actor =/= ActiveActor
+    end,
+  lists:filter(Pred, OldWuT -- WuT).  
 
 split_wut([], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
   {OwnedWuT, NotOwnedWuT, DisputedWuT};
