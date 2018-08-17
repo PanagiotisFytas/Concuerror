@@ -2754,7 +2754,7 @@ update_execution_tree_aux(
         fun(Elem) ->
             Elem#backtrack_entry_transferable.ownership =/= owned
         end,
-      false = lists:any(Pr, FinisedWuT), %% TODO remove this assertion
+      false = lists:any(Pr, FinishedWuT), %% TODO remove this assertion
       NewActiveChild = initialize_execution_tree_aux([NextTraceState|Rest]),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
