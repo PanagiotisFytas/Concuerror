@@ -746,8 +746,17 @@ get_next_event(#scheduler_state{
          "New interleaving detected in ~p (diverge @ ~p)~n",
          [N, _I]),
       get_next_event(Event, State#scheduler_state{origin = N});
-    _ ->
-      exit(impossible5)
+    [#backtrack_entry{event = Event, origin = N, ownership = _Other}|_] ->
+      case Last#trace_state.ownership of
+        true ->
+          ?debug(
+             _Logger,
+             "New interleaving detected in ~p (diverge @ ~p)~n",
+             [N, _I]),
+          get_next_event(Event, State#scheduler_state{origin = N});
+        false ->
+          exit({impossible5, _Other})
+      end
   end;
 get_next_event(#scheduler_state{logger = _Logger, trace = [Last|_]} = State) ->
   #trace_state{index = _I, wakeup_tree = WakeupTree} = Last,
@@ -2004,7 +2013,7 @@ has_more_to_explore(State) ->
      trace = Trace
     } = State,
   TracePrefix =
-    case Parallel and (DPOR =:= optimal) or (DPOR =:= source) of
+    case Parallel and ((DPOR =:= optimal) or (DPOR =:= source)) of
       false ->
         find_prefix(Trace, SchedulingBoundType);
       true ->
@@ -2039,40 +2048,51 @@ find_prefix(Trace, SchedulingBoundType) ->
 
 find_prefix_parallel_optimal([]) -> [];
 find_prefix_parallel_optimal([TraceState|Rest]) ->
-  #trace_state{wakeup_tree = Tree} = TraceState,
+  #trace_state{
+     ownership = TraceStateOwnership,
+     wakeup_tree = Tree
+    } = TraceState,
   %% owned < disputed < not_owned
-  case Tree =:= [] of
-    true ->
-      find_prefix_parallel_optimal(Rest);
+  case TraceStateOwnership of
     false ->
-      SortFun =
-        fun(A, B) ->
-            #backtrack_entry{ownership = OwnershipA} = A,
-            case OwnershipA of
-              owned ->
-                true;
-              not_owned ->
-                false;
-              disputed ->
-                #backtrack_entry{ownership = OwnershipB} = B,
-                case OwnershipB of
-                  owned ->
-                    false;
-                  not_owned ->
-                    true;
-                  disputed ->
-                    true
-                end
-            end
-        end,
-      SortedTree = lists:sort(SortFun, Tree),
-      [H|_] = SortedTree,
-      case H#backtrack_entry.ownership =:= not_owned of
+      case Tree =:= [] of
         true ->
-          %% no owned or disputed backtrack entries
           find_prefix_parallel_optimal(Rest);
         false ->
-          [TraceState#trace_state{wakeup_tree = SortedTree}|Rest]
+          SortFun =
+            fun(A, B) ->
+                #backtrack_entry{ownership = OwnershipA} = A,
+                case OwnershipA of
+                  owned ->
+                    true;
+                  not_owned ->
+                    false;
+                  disputed ->
+                    #backtrack_entry{ownership = OwnershipB} = B,
+                    case OwnershipB of
+                      owned ->
+                        false;
+                      not_owned ->
+                        true;
+                      disputed ->
+                        true
+                    end
+                end
+            end,
+          SortedTree = lists:sort(SortFun, Tree),
+          [H|_] = SortedTree,
+          case H#backtrack_entry.ownership =:= not_owned of
+            true ->
+              %% no owned or disputed backtrack entries
+              find_prefix_parallel_optimal(Rest);
+            false ->
+              [TraceState#trace_state{wakeup_tree = SortedTree}|Rest]
+          end
+      end;
+    true ->
+      case Tree =:= [] of
+        true -> find_prefix_parallel_optimal(Rest);
+        false -> [TraceState|Rest]
       end
   end.
 
