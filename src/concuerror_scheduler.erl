@@ -2463,7 +2463,7 @@ update_execution_tree_aux(
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
       %% sleep_set =  NotOwnedEvents ++ Sleep,
-      done = NextDone ++ NewNotOwnedEvents,
+      %% done = NextDone ++ NewNotOwnedEvents,
       wakeup_tree = OwnedWuT ++ NewOwnedWuT
      },
   case logically_equal(NextActiveEvent, OldNextActiveEvent) of
@@ -2848,15 +2848,15 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
   UpdatedTraceState =
     TraceState#trace_state_transferable{
       wakeup_tree = RestBacktrack,
-      sleep_set = [UnloadedBacktrackEvent|SleepSet],
-      done = [H, UnloadedBacktrackEvent|T]
+      sleep_set = [UnloadedBacktrackEvent|SleepSet]
+      %% done = [H, UnloadedBacktrackEvent|T]
      },
   NewFragmentTraceState =
     TraceState#trace_state_transferable{
       %% wakeup_tree = [UnloadedEntry],
-      wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}],
-      sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
-      done = [H|RestBacktrackEvents] ++ T
+      wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}]
+      %% sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
+      %% done = [H|RestBacktrackEvents] ++ T
      },
   NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
   distribute_interleavings_aux([UpdatedTraceState|Rest],
