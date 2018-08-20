@@ -755,7 +755,9 @@ get_next_event(#scheduler_state{
              [N, _I]),
           get_next_event(Event, State#scheduler_state{origin = N});
         false ->
-          exit({impossible5, _Other})
+          Ev = #event{label = make_ref()},
+          get_next_event(Ev, State)
+          %% exit({impossible5, _Other})
       end
   end;
 get_next_event(#scheduler_state{logger = _Logger, trace = [Last|_]} = State) ->
@@ -1535,9 +1537,9 @@ update_trace(
                       TraceStateOwnership =
                         case TraceState#trace_state.ownership of
                           false ->
-                            none;
+                            trace_not_owned;
                           true ->
-                            owned
+                            trace_owned
                           end,
                       {insert_wakeup_optimal_parallel(SleepSet, Wakeup, NotDep, Bound, Origin, TraceStateOwnership), false}
                     end;
@@ -1835,7 +1837,7 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
     } = Node,
   Ownership =
     case MaybeOwnership of
-      none ->
+      trace_not_owned ->
         case NodeOwnership of
           owned ->
             owned;
@@ -1845,6 +1847,8 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
           disputed ->
             disputed
         end;
+      trace_owned ->
+        owned;
       _ ->
         MaybeOwnership
     end,  
@@ -1876,7 +1880,7 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
                 #backtrack_entry{
                    event = Event,
                    origin = M,
-                   ownership = Ownership,
+                   ownership = Ownership, %% makes sure ownership at parents gets adjusted
                    wakeup_tree = NewTree},
               [Entry|Rest]
           end
@@ -2685,7 +2689,7 @@ update_execution_tree_aux(
   NewNotOwnedEvents = [Entry#backtrack_entry_transferable.event || Entry <- NewNotOwnedWuT],
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
-      %% sleep_set =  NotOwnedEvents ++ Sleep,
+      sleep_set =  NewNotOwnedEvents ++ _Sleep,
       %% done = NextDone ++ NewNotOwnedEvents,
       wakeup_tree = OwnedWuT ++ NewOwnedWuT ++ NotOwnedWuT ++ NewNotOwnedWuT
      },
@@ -2770,11 +2774,11 @@ update_execution_tree_aux(
       %% ReducedWuT = get_reduced_wut_from_done(NextDone, WuT),
       FinishedWuT = get_finished_wut(OldNextWuT, NextWuT, NextActiveEvent),
       {NewFinishedChilren, ReducedWuT} = get_finished_children_from_wut(FinishedWuT, WuT),
-      Pr =
-        fun(Elem) ->
-            Elem#backtrack_entry_transferable.ownership =/= owned
-        end,
-      false = lists:any(Pr, FinishedWuT), %% TODO remove this assertion
+      %% Pr =
+      %%   fun(Elem) ->
+      %%       Elem#backtrack_entry_transferable.ownership =/= owned
+      %%   end,
+      %% false = lists:any(Pr, FinishedWuT), %% TODO remove this assertion
       NewActiveChild = initialize_execution_tree_aux([NextTraceState|Rest]),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
@@ -3095,14 +3099,22 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
       distribute_interleavings_aux(Rest, [TraceState|RevTracePrefix], N, FragmentTraces, source);
     false ->
       [GivenEntry|RestEntries] = OwnedWuT,
+      NewNotOwnedWuT =
+        [GivenEntry#backtrack_entry_transferable{ownership = not_owned}|NotOwnedWuT],
+      NewSleepSet =
+        [GivenEntry#backtrack_entry_transferable.event|SleepSet],
       UpdatedTraceState =
         TraceState#trace_state_transferable{
-          wakeup_tree = RestEntries ++ [GivenEntry#backtrack_entry_transferable{ownership = not_owned}|NotOwnedWuT]
+          sleep_set = NewSleepSet,
+          wakeup_tree = RestEntries ++ NewNotOwnedWuT
          },
-      NotOwnedRest = [E#backtrack_entry_transferable{ownership = not_owned} || E <- RestEntries],
+      NotOwnedRest =
+        [E#backtrack_entry_transferable{ownership = not_owned} || E <- RestEntries],
+      NewFragmentSleepSet =
+        SleepSet ++ [E#backtrack_entry_transferable.event || E <- RestEntries],
       NewFragmentTraceState =
         TraceState#trace_state_transferable{
-          %% wakeup_tree = [UnloadedEntry],
+          sleep_set = NewFragmentSleepSet,
           wakeup_tree = [GivenEntry] ++ NotOwnedRest ++ NotOwnedWuT 
          },
       NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
