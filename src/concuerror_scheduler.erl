@@ -378,6 +378,7 @@ explore_scheduling_parallel(State) ->
   LogState = log_trace(UpdatedState),
   RacesDetectedState = plan_more_interleavings(LogState),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
+  %% io:fwrite("~p~n", [NewState]),
   Controller = NewState#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
   case HasMore of
@@ -746,7 +747,7 @@ get_next_event(#scheduler_state{
          "New interleaving detected in ~p (diverge @ ~p)~n",
          [N, _I]),
       get_next_event(Event, State#scheduler_state{origin = N});
-    [#backtrack_entry{event = Event, origin = N, ownership = _Other}|_] ->
+    [#backtrack_entry{event = Event, origin = N, ownership = disputed}|_] ->
       case Last#trace_state.ownership of
         true ->
           ?debug(
@@ -758,7 +759,10 @@ get_next_event(#scheduler_state{
           Ev = #event{label = make_ref()},
           get_next_event(Ev, State)
           %% exit({impossible5, _Other})
-      end
+      end;
+    [#backtrack_entry{ownership = not_owned}|_] ->
+      Event = #event{label = make_ref()},
+      get_next_event(Event, State)
   end;
 get_next_event(#scheduler_state{logger = _Logger, trace = [Last|_]} = State) ->
   #trace_state{index = _I, wakeup_tree = WakeupTree} = Last,
@@ -1826,7 +1830,16 @@ insert_wakeup([Node|Rest],  NotDep,  Bound,  Origin) ->
 
 insert_wakeup_parallel(          _, _NotDep,  Bound, _Origin, _) when Bound < 0 ->
   over_bound;
-insert_wakeup_parallel(         [],  NotDep, _Bound,  Origin, Ownership) ->
+insert_wakeup_parallel(         [],  NotDep, _Bound,  Origin, MaybeOwnership) ->
+  Ownership =
+    case MaybeOwnership of
+      trace_owned ->
+        owned;
+      trace_not_owned ->
+        disputed;
+      _ ->
+        MaybeOwnership
+    end,
   backtrackify(NotDep, Origin, Ownership);
 insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
   #backtrack_entry{
@@ -2026,6 +2039,9 @@ has_more_to_explore(State) ->
   case TracePrefix =:= [] of
     true -> {false, State#scheduler_state{trace = []}};
     false ->
+      [H|_] = TracePrefix,
+      io:fwrite("Scheduler ~w:~n~p~n",[State#scheduler_state.scheduler_number,
+                                       H#trace_state.wakeup_tree]),
       NewState =
         State#scheduler_state{need_to_replay = true, trace = TracePrefix},
       [Last|_] = TracePrefix,
@@ -2689,7 +2705,7 @@ update_execution_tree_aux(
   NewNotOwnedEvents = [Entry#backtrack_entry_transferable.event || Entry <- NewNotOwnedWuT],
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
-      sleep_set =  NewNotOwnedEvents ++ _Sleep,
+      %% sleep_set =  NewNotOwnedEvents ++ _Sleep,
       %% done = NextDone ++ NewNotOwnedEvents,
       wakeup_tree = OwnedWuT ++ NewOwnedWuT ++ NotOwnedWuT ++ NewNotOwnedWuT
      },
