@@ -2475,7 +2475,9 @@ update_execution_tree_aux(
           {P, [NC|S]} = split_active_children(NextActiveEvent, ActiveChildren),
           {P, [NC|S]}
         catch _:_ ->
-            io:fwrite("NextActiveEvent~p~nActiveChildren~p~n", [NextActiveEvent, ActiveChildren]),
+            ActiveChildrenEv = [C#execution_tree.event  || C <- ActiveChildren],
+            io:fwrite("OldNextActiveEvent~p~nNextActiveEvent~p~nActiveChildren~p~nFinishedChildren~p~n",
+                      [OldNextActiveEvent, NextActiveEvent, ActiveChildrenEv, FinishedChildren]),
             exit(fok)
         end,
       %% TODO there is a bug here

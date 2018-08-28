@@ -127,9 +127,13 @@ start_parallel(RawOptions, OldOptions) ->
 	  exit(Status)
     end,
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
+  io:fwrite("1111111111111111111111111~n",[]),
   CombinedStatus = get_combined_status(SchedulerWrappers),
+  io:fwrite("2222222222222222222222222~n",[]),
   ExitStatus = concuerror_logger:stop(LoggerWrapper, CombinedStatus),
+  io:fwrite("3333333333333333333333333~n",[]),
   ok = concuerror_controller:stop(Controller),
+  io:fwrite("4444444444444444444444444~n",[]),
   concuerror_process_spawner:stop(ProcessSpawner),
   ok = concuerror_nodes:clear(Nodes),
   ExitStatus.

@@ -20,7 +20,7 @@ start(Options) ->
   %% TODO figure out correct args
   %%Args = "-boot start_clean -noshell -pa " ++ Path
   Args = "-noshell -pa " ++ Path,
-  NumberOfSlaves = ?number_of_schedulers,
+  NumberOfSlaves = ?opt(number_of_schedulers, Options),%%?number_of_schedulers,
   start_slaves(Host, NamePrefix, Args, NumberOfSlaves).
 
 start_slaves(_, _, _, 0) -> [];

@@ -93,12 +93,18 @@ controller_loop(#controller_status{
      scheduling_start = SchedulingStart
     } = Status,
   [Scheduler ! finish || Scheduler <- Idle],
-  [receive finished -> ok end || _ <- Idle],
+  [receive finished -> ok 
+   after 10000 ->
+       exit(sched_responed_timeout)
+   end
+   || _ <- Idle],
   receive
     {stop, Pid} ->
       %%SchedulingEnd = erlang:monotonic_time(),
       report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
       Pid ! done
+  after 50000 ->
+      exit(stop_timeout)
   end;
 controller_loop(Status) ->
   #controller_status{
