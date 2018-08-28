@@ -2664,7 +2664,7 @@ update_execution_tree_done_aux([LastTraceState], ExecutionTree) ->
   case WuT =:= [] andalso ActiveChildren =:= [] of
     true ->
       %% this node is done, everything underneath it is explored
-      {node_finished, ActiveEvent};
+      ExecutionTree;%%{node_finished, ActiveEvent};
     false ->
       ExecutionTree
   end;
@@ -2713,7 +2713,7 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
         end;
       {ActiveChildren, []} ->
         %% TODO : maybe remove these checks
-        %%[] = Rest,
+        [] = Rest,
         true = lists:member(NextActiveEvent#event_transferable.actor,
                             [FC#event_transferable.actor || FC <- FinishedChildren]),
         {ActiveChildren, []}
