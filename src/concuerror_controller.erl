@@ -83,7 +83,7 @@ controller_loop(#controller_status{
   %% empty = Status#controller_status.execution_tree, %% this does not hold true
   case Status#controller_status.execution_tree =/= empty of
     true ->
-      concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
+      ok;%concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
     false ->
       ok
   end,
