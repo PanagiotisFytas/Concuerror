@@ -110,7 +110,7 @@ start_parallel(RawOptions, OldOptions) ->
   LoggerOptions = [{nodes, Nodes}|OldOptions],
   LoggerWrapper = concuerror_logger:start_wrapper(LoggerOptions),
   ProcessSpawner = concuerror_process_spawner:start(LoggerOptions),
-  Controller = concuerror_controller:start(Nodes),
+  Controller = concuerror_controller:start(Nodes, LoggerOptions),
   AdditionalOptionts = [{nodes, Nodes},
                         {process_spawner, ProcessSpawner},
                         {controller, Controller},

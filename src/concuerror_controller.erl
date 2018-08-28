@@ -2,11 +2,12 @@
 
 -module(concuerror_controller).
 
--export([start/1, stop/1, report_stats/3]).
+-export([start/2, stop/1, report_stats/3]).
 
 -include("concuerror.hrl").
 
 -record(controller_status, {
+          fragmentation_val :: non_neg_integer(),
           execution_tree    :: concuerror_scheduler:execution_tree(),
           schedulers_uptime :: maps:map(),
           busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
@@ -18,16 +19,16 @@
          }).
 %%------------------------------------------------------------------------------
 
--spec start([node()]) -> concuerror:exit_status().
+-spec start([node()], concuerror_options:options()) -> concuerror:exit_status().
 
-start(Nodes) ->
+start(Nodes, Options) ->
   Fun =
     fun() ->
-        initialize_controller(Nodes)
+        initialize_controller(Nodes, Options)
     end,
   spawn_link(Fun).
 
-initialize_controller(Nodes) ->
+initialize_controller(Nodes, Options) ->
   N = length(Nodes),
   SchedulerNumbers = maps:from_list(lists:zip(Nodes, lists:seq(1, length(Nodes)))),
   UnsortedSchedulers = get_schedulers(N, SchedulerNumbers),
@@ -55,6 +56,7 @@ initialize_controller(Nodes) ->
   Idle = SchedulerPids,
   InitialStatus =
     #controller_status{
+       fragmentation_val = 2*?opt(number_of_schedulers, Options),
        schedulers_uptime = NewUptimes,
        busy = Busy,
        execution_tree = ExecutionTree,

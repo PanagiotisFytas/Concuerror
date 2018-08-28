@@ -2546,7 +2546,7 @@ update_execution_tree_aux(
             end;
           {ActiveChildren, []} ->
             %% TODO : maybe remove these checks
-            [] = OldRest,
+            %%[] = OldRest,
             true = lists:member(OldNextActiveEvent#event_transferable.actor,
                                 [FC#event_transferable.actor || FC <- FinishedChildren]),
             {ActiveChildren, []}
