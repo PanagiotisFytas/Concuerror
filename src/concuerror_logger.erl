@@ -1190,6 +1190,7 @@ wrapper_loop(State)  ->
     } = State,
   receive
     {complete, Warn, Scheduler, Ref} ->
+      %%      io:fwrite("Wrapper1 Start~n", []),
       Scheduler ! Ref, %% complete is a synchronus call to the logger
       Node = node(Scheduler),
       LogQueue = maps:get(Node, LoggerCalls),
@@ -1202,10 +1203,26 @@ wrapper_loop(State)  ->
           current_job = MaybeUpdatedCurrentJob,
           calls_to_logger = maps:update(Node, queue:new(), LoggerCalls)
          },
-      wrapper_loop(UpdatedState)
+      %%      io:fwrite("Wrapper1 End~n", []),
+      wrapper_loop(UpdatedState);
+    {stop, CombinedStatus, ControllerParent} ->
+      %%   io:fwrite("Wrapper4 Start~n", []),
+          io:fwrite("stop1~n",[]),
+          %% makes sure that logger is empty
+          finish_scheduled_jobs(CurrentJob, Jobs),
+          io:fwrite("stop2~n",[]),
+          log_incomplete_jobs(Logger, maps:values(LoggerCalls)),
+          io:fwrite("stop3~n",[]),
+          SchedulerStatus = concuerror:get_scheduler_status(CombinedStatus, Logger),
+          io:fwrite("stop4~n",[]),
+          ExitStatus = stop(Logger, SchedulerStatus),
+          io:fwrite("stop5~n",[]),
+      %%       io:fwrite("Wrapper4 End~n", []),
+          ControllerParent ! {stopped, ExitStatus}
   after 0 ->
       receive
         {complete, Warn, Scheduler, Ref} ->
+          %% io:fwrite("Wrapper2 Start~n", []),
           Scheduler ! Ref, %% complete is a synchronus call to the logger
           Node = node(Scheduler),
           LogQueue = maps:get(Node, LoggerCalls),
@@ -1218,8 +1235,10 @@ wrapper_loop(State)  ->
               current_job = MaybeUpdatedCurrentJob,
               calls_to_logger = maps:update(Node, queue:new(), LoggerCalls)
              },
+          %% io:fwrite("Wrapper2 End~n", []),
           wrapper_loop(UpdatedState);
         Ref when Ref =:= CurrentJob ->
+          %% io:fwrite("Wrapper3 Start~n", []),
           {Head, JobsLeft} = queue:out(Jobs),
           NewLoggerJob = 
             case Head of
@@ -1235,15 +1254,24 @@ wrapper_loop(State)  ->
               jobs = JobsLeft,
               current_job = NewLoggerJob
              },
+          %% io:fwrite("Wrapper3 End~n", []),
           wrapper_loop(UpdatedState);
         {stop, CombinedStatus, ControllerParent} ->
+          %% io:fwrite("Wrapper4 Start~n", []),
+          io:fwrite("stop1~n",[]),
           %% makes sure that logger is empty
           finish_scheduled_jobs(CurrentJob, Jobs),
+          io:fwrite("stop2~n",[]),
           log_incomplete_jobs(Logger, maps:values(LoggerCalls)),
+          io:fwrite("stop3~n",[]),
           SchedulerStatus = concuerror:get_scheduler_status(CombinedStatus, Logger),
+          io:fwrite("stop4~n",[]),
           ExitStatus = stop(Logger, SchedulerStatus),
+          io:fwrite("stop5~n",[]),
+          %% io:fwrite("Wrapper4 End~n", []),
           ControllerParent ! {stopped, ExitStatus};
         LogRequest ->
+          %% io:fwrite("Wrapper5 Start~nRequest:~p~n", [LogRequest]),
           %% Asyncronus request
           RequestList = tuple_to_list(LogRequest),
           Scheduler = lists:last(RequestList),
@@ -1261,6 +1289,7 @@ wrapper_loop(State)  ->
           UpdatedLogQueue = queue:in(MaybeModifyLogRequest, LogQueue),
           UpdatedLoggerCalls = maps:update(Node, UpdatedLogQueue, LoggerCalls),
           UpdatedState = State#wrapper_state{calls_to_logger = UpdatedLoggerCalls},
+          %% io:fwrite("Wrapper5 End~n", []),
           wrapper_loop(UpdatedState)
       end
   end.

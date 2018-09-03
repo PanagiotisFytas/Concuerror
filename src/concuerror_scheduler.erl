@@ -433,7 +433,9 @@ own_next_interleaving(#scheduler_state{trace = [TraceState|_]} = _State) ->
           %% TODO :
           %% this should be made impossible by filtering (or sorting) not_owned entries
           %% in the find_prefix function
-          exit(impossible)
+          %% exit(impossible)
+          io:fwrite("IMPOSSIBLE!!!!!!~n",[]),
+          false
       end
   end.        
 
@@ -2478,6 +2480,11 @@ update_execution_tree_aux(
             ActiveChildrenEv = [C#execution_tree.event  || C <- ActiveChildren],
             io:fwrite("OldNextActiveEvent~p~nNextActiveEvent~p~nActiveChildren~p~nFinishedChildren~p~n",
                       [OldNextActiveEvent, NextActiveEvent, ActiveChildrenEv, FinishedChildren]),
+            io:fwrite("OldTraceLeft: ~p~nTraceLeft: ~p~n", 
+                     [
+                      [TS#trace_state_transferable.done || TS <- [OldTraceState, OldNextTraceState|OldRest]],
+                      [TS#trace_state_transferable.done || TS <- [TraceState, NextTraceState|Rest]]
+                     ]),
             exit(fok)
         end,
       %% TODO there is a bug here
@@ -2635,7 +2642,7 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
   %% print_trace(lists:reverse(Trace)),
   %% io:fwrite("~n"),
   case update_execution_tree_done_aux(lists:reverse(Trace), ExecutionTree) of
-    {node_finished, _Ev} ->
+    {node_finished, _Event} ->
       %% io:fwrite("Node finished:~p~n", [_Ev]),
       %% io:fwrite("============DONE=============~n",[]),
       empty;
@@ -2729,14 +2736,17 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
         end;
       {ActiveChildren, []} ->
         %% TODO : maybe remove these checks
-        [] = Rest,
-        true = lists:member(NextActiveEvent#event_transferable.actor,
-                            [FC#event_transferable.actor || FC <- FinishedChildren]),
+        %% This may mean that a new child must be added
+        %% but probably not since it would make sence to
+        %% add this child before
+        %% [] = Rest,
+        %% true = lists:member(NextActiveEvent#event_transferable.actor,
+        %%                    [FC#event_transferable.actor || FC <- FinishedChildren]),
         {ActiveChildren, []}
     end,
   case UpdatedWuT =:= [] andalso UpdatedActiveChildren =:= [] of
     true ->
-      %% this node is done, everything underneath it is explored
+      %% this node is done, everything underneath is explored
       {maybe_finished, ActiveEvent};
     false ->
       ExecutionTree#execution_tree{

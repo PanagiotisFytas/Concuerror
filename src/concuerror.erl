@@ -129,6 +129,7 @@ start_parallel(RawOptions, OldOptions) ->
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
   io:fwrite("1111111111111111111111111~n",[]),
   CombinedStatus = get_combined_status(SchedulerWrappers),
+  io:fwrite("CombinedStatus: ~p~n", [CombinedStatus]),
   io:fwrite("2222222222222222222222222~n",[]),
   ExitStatus = concuerror_logger:stop(LoggerWrapper, CombinedStatus),
   io:fwrite("3333333333333333333333333~n",[]),
@@ -161,13 +162,11 @@ get_combined_status(SchedulerWrappers, Status) ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
       Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
       NewStatus =
-        case Status of
-          normal ->
+        case Status =:= normal of
+          true ->
             ExitStatus;
           false ->
-            Status;
-          _ ->
-            exit(Status)
+            Status
         end,
       get_combined_status(Rest, NewStatus)
   end.

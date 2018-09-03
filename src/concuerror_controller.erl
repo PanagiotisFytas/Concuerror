@@ -105,7 +105,7 @@ controller_loop(#controller_status{
       %%SchedulingEnd = erlang:monotonic_time(),
       report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
       Pid ! done
-  after 50000 ->
+  after 600000 ->
       exit(stop_timeout)
   end;
 controller_loop(Status) ->
