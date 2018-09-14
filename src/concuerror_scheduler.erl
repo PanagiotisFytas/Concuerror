@@ -1538,14 +1538,14 @@ update_trace(
                     false ->
                       {insert_wakeup_optimal(SleepSet, Wakeup, NotDep, Bound, Origin), false};
                     true ->
-                      TraceStateOwnership =
+                      Ownership =
                         case TraceState#trace_state.ownership of
                           false ->
-                            trace_not_owned;
+                            disputed;
                           true ->
-                            trace_owned
+                            owned
                           end,
-                      {insert_wakeup_optimal_parallel(SleepSet, Wakeup, NotDep, Bound, Origin, TraceStateOwnership), false}
+                      {insert_wakeup_optimal_parallel(SleepSet, Wakeup, NotDep, Bound, Origin, Ownership), false}
                     end;
                 true ->
                   V =
@@ -1830,41 +1830,14 @@ insert_wakeup([Node|Rest],  NotDep,  Bound,  Origin) ->
 
 insert_wakeup_parallel(          _, _NotDep,  Bound, _Origin, _) when Bound < 0 ->
   over_bound;
-insert_wakeup_parallel(         [],  NotDep, _Bound,  Origin, MaybeOwnership) ->
-  Ownership =
-    case MaybeOwnership of
-      trace_owned ->
-        owned;
-      trace_not_owned ->
-        disputed;
-      _ ->
-        MaybeOwnership
-    end,
+insert_wakeup_parallel(         [],  NotDep, _Bound,  Origin, Ownership) ->
   backtrackify(NotDep, Origin, Ownership);
-insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
+insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, Ownership) ->
   #backtrack_entry{
      event = Event,
      origin = M,
-     ownership = NodeOwnership,
      wakeup_tree = Deeper
     } = Node,
-  Ownership =
-    case MaybeOwnership of
-      trace_not_owned ->
-        case NodeOwnership of
-          owned ->
-            owned;
-          not_owned ->
-            %% disputed;
-            owned;
-          disputed ->
-            disputed
-        end;
-      trace_owned ->
-        owned;
-      _ ->
-        MaybeOwnership
-    end,  
   case check_initial(Event, NotDep) of
     false ->
       NewBound =
@@ -1872,7 +1845,7 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
           true -> Bound - 1;
           false -> Bound
         end,
-      case insert_wakeup_parallel(Rest, NotDep, NewBound, Origin, MaybeOwnership) of
+      case insert_wakeup_parallel(Rest, NotDep, NewBound, Origin, Ownership) of
         Special
           when
             Special =:= skip;
@@ -1893,12 +1866,34 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, MaybeOwnership) ->
                 #backtrack_entry{
                    event = Event,
                    origin = M,
-                   ownership = Ownership, %% makes sure ownership at parents gets adjusted
-                   wakeup_tree = NewTree},
+                   ownership = determine_ownership(Ownership, NewTree),
+                   %% makes sure the the ownership at the parents gets adjusted
+                   wakeup_tree = NewTree
+                },
               [Entry|Rest]
           end
       end
   end.
+
+%% When the trace is not owned:
+%% Even if one children entry is owned then the parent node is considered owned.
+%% Otherwise, no children entries are owned (one of them must be disputed because
+%% a wakeup_tree insertion has occured) then parent node is considered disputed
+%% as well.
+determine_ownership(owned, _) ->
+  %% here the trace is owned so the wakeup_tree is owned as well
+  owned;
+determine_ownership(_, []) ->
+  disputed;
+determine_ownership(_, [#backtrack_entry{ownership = owned} = _|_]) ->
+  owned;
+determine_ownership(TraceOwnership, [#backtrack_entry{ownership = Ownership} = _|Rest])
+  when
+    Ownership =:= disputed;
+    Ownership =:= not_owned ->
+ determine_ownership(TraceOwnership, Rest).
+
+  
 
 backtrackify(Seq, Cause) ->
   Fold =
