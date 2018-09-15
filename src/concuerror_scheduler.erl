@@ -229,6 +229,7 @@
 -record(execution_tree, {
           active_children         = [] :: [execution_tree()],
           finished_children       = [] :: [event_transferable()],
+          maybe_finished_wut      = [] :: event_tree_transferable(),
           event                        :: event_transferable(),
           fragments_acessing_node = 1  :: non_neg_integer(),
           next_wakeup_tree        = [] :: event_tree_transferable()
