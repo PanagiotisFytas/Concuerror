@@ -378,6 +378,7 @@ explore_scheduling_parallel(State) ->
   LogState = log_trace(UpdatedState),
   RacesDetectedState = plan_more_interleavings(LogState),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
+  print_all_wut(NewState),
   %% io:fwrite("~p~n", [NewState]),
   Controller = NewState#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
@@ -2035,8 +2036,9 @@ has_more_to_explore(State) ->
     true -> {false, State#scheduler_state{trace = []}};
     false ->
       [H|_] = TracePrefix,
-      io:fwrite("Scheduler ~w:~n~p~n",[State#scheduler_state.scheduler_number,
-                                       H#trace_state.wakeup_tree]),
+      %% TODO : remove
+      %% io:fwrite("Scheduler ~w:~n~p~n",[State#scheduler_state.scheduler_number,
+      %%                                  H#trace_state.wakeup_tree]),
       NewState =
         State#scheduler_state{need_to_replay = true, trace = TracePrefix},
       [Last|_] = TracePrefix,
@@ -2555,6 +2557,40 @@ owned(Entry) ->
     disputed ->
       'Disputed'
   end.
+
+print_all_wut(State) ->
+  io:fwrite("Scheduler: ~w~n", [State#scheduler_state.scheduler_number]),
+  print_all_wut_rev(lists:reverse(State#scheduler_state.trace)).
+
+print_all_wut_rev([]) ->
+  io:fwrite("~n", []);
+print_all_wut_rev([TraceState|Rest]) ->
+  [Ev|_] = TraceState#trace_state.done,
+  io:fwrite("TraceState: ~p~n", [Ev#event.actor]),
+  print_wut(TraceState#trace_state.wakeup_tree),
+  print_all_wut_rev(Rest).
+
+print_wut(WuT) ->
+  Prefix = "",
+  print_wut(Prefix, WuT).
+
+print_wut(_, []) ->
+  ok;
+print_wut(Prefix, [Entry|Rest]) ->
+  Event = Entry#backtrack_entry.event,
+  Actor = Event#event.actor,
+  Ownership = Entry#backtrack_entry.ownership,
+  io:fwrite("~s~p ~p~n", [Prefix ++ "|-> ", Actor, Ownership]),
+  Pad =
+  case Rest of
+    [] ->
+      "    ";
+    _ ->
+      "|   "
+  end,
+  print_wut(Prefix ++ Pad, Entry#backtrack_entry.wakeup_tree),
+  print_wut(Prefix, Rest).
+  
 %%------------------------------------------------------------------------------
 
 -spec update_execution_tree(reduced_scheduler_state(),
