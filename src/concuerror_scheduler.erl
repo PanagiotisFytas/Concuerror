@@ -718,27 +718,7 @@ get_next_event(#scheduler_state{
                  } = State) 
   when Parallel ->
   #trace_state{index = _I, wakeup_tree = WakeupTree} = Last,
-  SortFun =
-    fun(A, B) ->
-        #backtrack_entry{ownership = OwnershipA} = A,
-        case OwnershipA of
-          owned ->
-            true;
-          not_owned ->
-            false;
-          disputed ->
-            #backtrack_entry{ownership = OwnershipB} = B,
-            case OwnershipB of
-              owned ->
-                false;
-              not_owned ->
-                true;
-              disputed ->
-                true
-            end
-        end
-    end,
-  SortedWakeupTree = lists:sort(SortFun, WakeupTree),
+  SortedWakeupTree = sort_wut(WakeupTree),
   case SortedWakeupTree of
     [] ->
       Event = #event{label = make_ref()},
@@ -989,7 +969,9 @@ update_state(#event{actor = Actor} = Event, State) ->
      logger = Logger,
      scheduling_bound_type = SchedulingBoundType,
      trace = [Last|Prev],
-     use_sleep_sets = UseSleepSets
+     use_sleep_sets = UseSleepSets,
+     parallel = Parallel,
+     dpor = DPOR
     } = State,
   #trace_state{
      actors      = Actors,
@@ -1021,7 +1003,20 @@ update_state(#event{actor = Actor} = Event, State) ->
   {NewLastWakeupTree, NextWakeupTree} =
     case WakeupTree of
       [] -> {[], []};
-      [#backtrack_entry{wakeup_tree = NWT}|Rest] -> {Rest, NWT}
+      [#backtrack_entry{wakeup_tree = NWT}|Rest] ->
+        case Parallel andalso DPOR =:= optimal of
+          false ->
+            {Rest, NWT};
+          true ->
+            %% io:fwrite("Scheduler: ~w~n", [State#scheduler_state.scheduler_number]),
+            %% io:fwrite("NWT~n"),
+            %% print_wut(NWT),
+            %% io:fwrite("Rest:"),
+            %% print_wut(Rest),
+            %% Rest should get sorted at a later interleaving
+            SortedNWT = sort_wut(NWT),
+            {Rest, SortedNWT}
+        end
     end,
   NewSchedulingBound =
     next_bound(SchedulingBoundType, Done, PreviousActor, SchedulingBound),
@@ -1543,7 +1538,7 @@ update_trace(
                       Ownership =
                         case TraceState#trace_state.ownership of
                           false ->
-                            disputed;
+                            owned;
                           true ->
                             owned
                           end,
@@ -2027,7 +2022,7 @@ has_more_to_explore(State) ->
      trace = Trace
     } = State,
   TracePrefix =
-    case Parallel and ((DPOR =:= optimal) or (DPOR =:= source)) of
+    case Parallel andalso ((DPOR =:= optimal) or (DPOR =:= source)) of
       false ->
         find_prefix(Trace, SchedulingBoundType);
       true ->
@@ -2077,27 +2072,7 @@ find_prefix_parallel_optimal([TraceState|Rest]) ->
         true ->
           find_prefix_parallel_optimal(Rest);
         false ->
-          SortFun =
-            fun(A, B) ->
-                #backtrack_entry{ownership = OwnershipA} = A,
-                case OwnershipA of
-                  owned ->
-                    true;
-                  not_owned ->
-                    false;
-                  disputed ->
-                    #backtrack_entry{ownership = OwnershipB} = B,
-                    case OwnershipB of
-                      owned ->
-                        false;
-                      not_owned ->
-                        true;
-                      disputed ->
-                        true
-                    end
-                end
-            end,
-          SortedTree = lists:sort(SortFun, Tree),
+          SortedTree = sort_wut(Tree),
           [H|_] = SortedTree,
           case H#backtrack_entry.ownership =:= not_owned of
             true ->
@@ -2114,6 +2089,28 @@ find_prefix_parallel_optimal([TraceState|Rest]) ->
       end
   end.
 
+sort_wut(WuT) ->
+  SortFun =
+    fun(A, B) ->
+        #backtrack_entry{ownership = OwnershipA} = A,
+        case OwnershipA of
+          owned ->
+            true;
+          not_owned ->
+            false;
+          disputed ->
+            #backtrack_entry{ownership = OwnershipB} = B,
+            case OwnershipB of
+              owned ->
+                false;
+              not_owned ->
+                true;
+              disputed ->
+                true
+            end
+        end
+    end,
+  lists:sort(SortFun, WuT).
 
 replay(#scheduler_state{need_to_replay = false} = State) ->
   State;

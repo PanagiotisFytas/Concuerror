@@ -16,6 +16,7 @@
           budget_exceeded = 0  :: integer(),
           ownership_claims = 0 :: integer()
          }).
+
 %%------------------------------------------------------------------------------
 
 -spec start([node()]) -> concuerror:exit_status().
@@ -186,7 +187,35 @@ wait_scheduler_response(Status) ->
                         busy = NewBusy,
                         execution_tree = NewExecutionTree,
                         idle = NewIdle
-                       })
+                       });
+    {stop, Pid} ->
+      SchedulingEnd = erlang:monotonic_time(),
+      %% TODO : remove this check
+      %% empty = Status#controller_status.execution_tree, %% this does not hold true
+      #controller_status{
+         schedulers_uptime = _Uptimes,
+         idle = Idle,
+         busy = Busy,
+         scheduling_start = SchedulingStart
+        } = Status,
+      BusyPids = [Pid || {Pid, _} <- Busy],
+      Schedulers = [Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
+      [Scheduler ! finish || Scheduler <- Schedulers],
+      [receive finished -> ok end || _ <- Schedulers],
+      report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
+      Pid ! done
+  end.
+
+is_non_local_process_alive(Pid) ->
+  case rpc:pinfo(Pid, status) of
+    undefined ->
+      false;
+    {status, Exited}
+      when Exited =:= exiting;
+           Exited =:= garbage_collecting ->
+      false;
+    _ ->
+      true
   end.
 
 start_schedulers([], NewIdle, NewBusy) -> {NewIdle, NewBusy};

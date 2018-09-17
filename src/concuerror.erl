@@ -124,10 +124,10 @@ start_parallel(RawOptions, OldOptions) ->
               start(ParallelOptions, LogMsgs);
 	    {exit, ExitStatus} -> ExitStatus
 	  end,
-	  exit(Status)
+        exit(Status)
     end,
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
-  CombinedStatus = get_combined_status(SchedulerWrappers),
+  CombinedStatus = get_combined_status(SchedulerWrappers, LoggerOptions),
   ExitStatus = concuerror_logger:stop(LoggerWrapper, CombinedStatus),
   ok = concuerror_controller:stop(Controller),
   concuerror_process_spawner:stop(ProcessSpawner),
@@ -141,31 +141,23 @@ spawn_scheduler_wrappers([Node|Rest], StartFun) ->
   Ref = monitor(process, Pid),
   [{Pid, Ref} | spawn_scheduler_wrappers(Rest, StartFun)].
 
-get_combined_status(SchedulerWrappers) ->
-  receive
-    {'DOWN', Ref, process, Pid, ExitStatus} ->
-      true = lists:member({Pid, Ref}, SchedulerWrappers),
-      Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
-      get_combined_status(Rest, ExitStatus)
-  end.
+get_combined_status(SchedulerWrappers, Options) ->
+  get_combined_status(SchedulerWrappers, Options, normal).
 
-get_combined_status([], Status) ->
+get_combined_status([], _, Status) ->
   Status;
-get_combined_status(SchedulerWrappers, Status) ->
+get_combined_status(SchedulerWrappers, Options, Status) ->
   receive
     {'DOWN', Ref, process, Pid, ExitStatus} ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
       Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
-      NewStatus =
-        case Status of
-          normal ->
-            ExitStatus;
-          false ->
-            Status;
-          _ ->
-            exit(Status)
-        end,
-      get_combined_status(Rest, NewStatus)
+      io:fwrite("EXiTSTATUS~w~n", [ExitStatus]),
+      case ExitStatus of
+        normal ->
+          get_combined_status(Rest, Status);
+        _ ->
+          ExitStatus
+      end
   end.
       
 %%------------------------------------------------------------------------------
