@@ -2065,27 +2065,19 @@ find_prefix_parallel_optimal([TraceState|Rest]) ->
      ownership = TraceStateOwnership,
      wakeup_tree = Tree
     } = TraceState,
-  %% owned < disputed < not_owned
-  case TraceStateOwnership of
+  case Tree =:= [] of
+    true ->
+      find_prefix_parallel_optimal(Rest);
     false ->
-      case Tree =:= [] of
+      %% owned < disputed < not_owned
+      SortedTree = sort_wut(Tree),
+      [H|_] = SortedTree,
+      case H#backtrack_entry.ownership =:= not_owned of
         true ->
+          %% no owned or disputed backtrack entries
           find_prefix_parallel_optimal(Rest);
         false ->
-          SortedTree = sort_wut(Tree),
-          [H|_] = SortedTree,
-          case H#backtrack_entry.ownership =:= not_owned of
-            true ->
-              %% no owned or disputed backtrack entries
-              find_prefix_parallel_optimal(Rest);
-            false ->
-              [TraceState#trace_state{wakeup_tree = SortedTree}|Rest]
-          end
-      end;
-    true ->
-      case Tree =:= [] of
-        true -> find_prefix_parallel_optimal(Rest);
-        false -> [TraceState|Rest]
+          [TraceState#trace_state{wakeup_tree = SortedTree}|Rest]
       end
   end.
 
@@ -2565,7 +2557,9 @@ print_all_wut_rev([]) ->
 print_all_wut_rev([TraceState|Rest]) ->
   [Ev|_] = TraceState#trace_state.done,
   io:fwrite("TraceState: ~p~n", [Ev#event.actor]),
+  io:fwrite("WuT:~n"),
   print_wut(TraceState#trace_state.wakeup_tree),
+  %% io:fwrite("SleepSet: ~w~n", [TraceState#trace_state.sleep_set]),
   print_all_wut_rev(Rest).
 
 print_wut(WuT) ->
