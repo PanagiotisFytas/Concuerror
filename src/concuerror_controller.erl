@@ -7,16 +7,16 @@
 -include("concuerror.hrl").
 
 -record(controller_status, {
-          fragmentation_val :: non_neg_integer(),
-          execution_tree    :: concuerror_scheduler:execution_tree(),
-          schedulers_uptime :: maps:map(),
-          busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
-          idle              :: [pid()],
-          idle_frontier     :: [concuerror_scheduler:reduced_scheduler_state()],
-          scheduling_start  :: integer(),
-          budget_exceeded = 0  :: integer(),
-          ownership_claims = 0 :: integer()
-         }).
+                            fragmentation_val :: non_neg_integer(),
+                            execution_tree    :: concuerror_scheduler:execution_tree(),
+                            schedulers_uptime :: maps:map(),
+                            busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
+                            idle              :: [pid()],
+                            idle_frontier     :: [concuerror_scheduler:reduced_scheduler_state()],
+                            scheduling_start  :: integer(),
+                            budget_exceeded = 0  :: integer(),
+                            ownership_claims = 0 :: integer()
+                           }).
 %%------------------------------------------------------------------------------
 
 -spec start([node()], concuerror_options:options()) -> concuerror:exit_status().
@@ -65,7 +65,7 @@ initialize_controller(Nodes, Options) ->
        scheduling_start = SchedulingStart
       },
   controller_loop(InitialStatus).
- 
+
 get_schedulers(0, _) -> [];
 get_schedulers(N, SchedulerNumbers) ->
   receive
@@ -194,7 +194,35 @@ wait_scheduler_response(Status) ->
                         busy = NewBusy,
                         execution_tree = NewExecutionTree,
                         idle = NewIdle
-                       })
+                       });
+    {stop, Pid} ->
+      SchedulingEnd = erlang:monotonic_time(),
+      %% TODO : remove this check
+      %% empty = Status#controller_status.execution_tree, %% this does not hold true
+      #controller_status{
+         schedulers_uptime = _Uptimes,
+         idle = Idle,
+         busy = Busy,
+         scheduling_start = SchedulingStart
+        } = Status,
+      BusyPids = [Pid || {Pid, _} <- Busy],
+      Schedulers = [Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
+      [Scheduler ! finish || Scheduler <- Schedulers],
+      [receive finished -> ok end || _ <- Schedulers],
+      report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
+      Pid ! done
+  end.
+
+is_non_local_process_alive(Pid) ->
+  case rpc:pinfo(Pid, status) of
+    undefined ->
+      false;
+    {status, Exited}
+      when Exited =:= exiting;
+           Exited =:= garbage_collecting ->
+      false;
+    _ ->
+      true
   end.
 
 start_schedulers([], NewIdle, NewBusy) -> {NewIdle, NewBusy};

@@ -127,14 +127,9 @@ start_parallel(RawOptions, OldOptions) ->
 	  exit(Status)
     end,
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
-  io:fwrite("1111111111111111111111111~n",[]),
-  CombinedStatus = get_combined_status(SchedulerWrappers),
-  io:fwrite("CombinedStatus: ~p~n", [CombinedStatus]),
-  io:fwrite("2222222222222222222222222~n",[]),
+  CombinedStatus = get_combined_status(SchedulerWrappers, LoggerOptions),
   ExitStatus = concuerror_logger:stop(LoggerWrapper, CombinedStatus),
-  io:fwrite("3333333333333333333333333~n",[]),
   ok = concuerror_controller:stop(Controller),
-  io:fwrite("4444444444444444444444444~n",[]),
   concuerror_process_spawner:stop(ProcessSpawner),
   ok = concuerror_nodes:clear(Nodes),
   ExitStatus.
@@ -146,31 +141,24 @@ spawn_scheduler_wrappers([Node|Rest], StartFun) ->
   Ref = monitor(process, Pid),
   [{Pid, Ref} | spawn_scheduler_wrappers(Rest, StartFun)].
 
-get_combined_status(SchedulerWrappers) ->
+get_combined_status(SchedulerWrappers, Options) ->
+  get_combined_status(SchedulerWrappers, Options, normal).
+
+get_combined_status([], _, Status) ->
+  Status;
+get_combined_status(SchedulerWrappers, Options, Status) ->
   receive
     {'DOWN', Ref, process, Pid, ExitStatus} ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
       Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
-      get_combined_status(Rest, ExitStatus)
+      case ExitStatus of
+        normal ->
+          get_combined_status(Rest, Status);
+        _ ->
+          ExitStatus
+      end
   end.
 
-get_combined_status([], Status) ->
-  Status;
-get_combined_status(SchedulerWrappers, Status) ->
-  receive
-    {'DOWN', Ref, process, Pid, ExitStatus} ->
-      true = lists:member({Pid, Ref}, SchedulerWrappers),
-      Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
-      NewStatus =
-        case Status =:= normal of
-          true ->
-            ExitStatus;
-          false ->
-            Status
-        end,
-      get_combined_status(Rest, NewStatus)
-  end.
-      
 %%------------------------------------------------------------------------------
 
 -spec maybe_cover_compile() -> 'ok'.
