@@ -2809,13 +2809,14 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
       %% this node is done, everything underneath is explored
       %%{node_finished, ActiveEvent};
       %%{maybe_finished, ActiveEvent};
-      ExecutionTree#execution_tree{
-        active_children = UpdatedActiveChildren,
-        finished_children =
-          MaybeNewFinishedChild ++ NewFinishedChildren ++ FinishedChildren,
-        next_wakeup_tree = UpdatedWuT
-       }
-      {maybe_finished, UpdatedExecutionTree}
+      UpdatedExecutionTree = 
+        ExecutionTree#execution_tree{
+          active_children = UpdatedActiveChildren,
+          finished_children =
+            MaybeNewFinishedChild ++ NewFinishedChildren ++ FinishedChildren,
+          next_wakeup_tree = UpdatedWuT
+         },
+      {maybe_finished, UpdatedExecutionTree};
     false ->
       ExecutionTree#execution_tree{
         active_children = UpdatedActiveChildren,
