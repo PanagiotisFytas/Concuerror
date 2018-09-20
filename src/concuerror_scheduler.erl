@@ -2920,7 +2920,8 @@ event_is_member(Event, [H|T]) ->
   end.
 
 same_actor(Event1, Event2) ->
-  Event1#event_transferable.actor =:= Event2#event_transferable.actor.
+  logically_equal(Event1, Event2).
+%%  Event1#event_transferable.actor =:= Event2#event_transferable.actor.
 
 %%------------------------------------------------------------------------------
 
