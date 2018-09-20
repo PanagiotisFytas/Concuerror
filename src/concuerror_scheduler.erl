@@ -2342,7 +2342,12 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
   %% print_trace(lists:reverse(Trace)),
   %% io:fwrite("~n"),
   {RevNewTrace, NewExecutionTree, BacktrackEntriesRemoved} =
-    update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree),
+    try
+      update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree)
+    catch
+      C:R:S ->
+        exit({C,R,S})
+    end,
   %% print_trace(RevNewTrace),
   %% io:fwrite("~n"),
   %% print_tree("", NewExecutionTree),
@@ -2719,17 +2724,22 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
   %% io:fwrite("~n"),
   %% print_trace(lists:reverse(Trace)),
   %% io:fwrite("~n"),
-  case update_execution_tree_done_aux(lists:reverse(Trace), ExecutionTree) of
-    {node_finished, _Event} ->
-      %% io:fwrite("Node finished:~p~n", [_Ev]),
-      %% io:fwrite("============DONE=============~n",[]),
-      empty;
-    {maybe_finished, _Tree} ->
-      empty;
-    UpdatedTree ->
-      %% print_tree("", UpdatedTree),
-      %% io:fwrite("=============================~n",[]),
-      UpdatedTree
+  try
+    case update_execution_tree_done_aux(lists:reverse(Trace), ExecutionTree) of
+      {node_finished, _Event} ->
+        %% io:fwrite("Node finished:~p~n", [_Ev]),
+        %% io:fwrite("============DONE=============~n",[]),
+        empty;
+      {maybe_finished, _Tree} ->
+        empty;
+      UpdatedTree ->
+        %% print_tree("", UpdatedTree),
+        %% io:fwrite("=============================~n",[]),
+        UpdatedTree
+    end
+  catch
+    C:R:S ->
+      exit({C,R,S})
   end.
 
 update_execution_tree_done_aux([LastTraceState], ExecutionTree) ->
