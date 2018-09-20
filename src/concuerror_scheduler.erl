@@ -2461,7 +2461,7 @@ update_execution_tree_aux(
                    [TS#trace_state_transferable.done || TS <- [OldTraceState, OldNextTraceState|OldRest]],
                    [TS#trace_state_transferable.done || TS <- [TraceState]]
                   ]),
-        exit(fok4),
+        exit({not_found4, erlang:get_stacktrace()}),
         true = lists:member(OldNextActiveEvent#event_transferable.actor,
                             [FC#event_transferable.actor || FC <- FinishedChildren]),
         {ActiveChildren, []}
@@ -2550,7 +2550,7 @@ update_execution_tree_aux(
                       [TS#trace_state_transferable.done || TS <- [OldTraceState, OldNextTraceState|OldRest]],
                       [TS#trace_state_transferable.done || TS <- [TraceState, NextTraceState|Rest]]
                      ]),
-            exit(fok)
+            exit({not_found, erlang:get_stacktrace()})
         end,
       %% TODO there is a bug here
       %% try split_active_children(NextActiveEvent, ActiveChildren)
@@ -2561,7 +2561,7 @@ update_execution_tree_aux(
       %%     io:fwrite("~n"),
       %%     print_trace([TraceState, NextTraceState|Rest]),
       %%     io:fwrite("~n"),
-      %%     exit(fok)
+      %%     exit(not_found)
       %% end,
       {[UpdatedNextTraceState|UpdatedRest], UpdatedActiveChildren, MaybeNewFinishedChild, EntriesRemoved} =
         case update_execution_tree_aux(
@@ -2627,7 +2627,7 @@ update_execution_tree_aux(
                       [TS#trace_state_transferable.done || TS <- [OldTraceState, OldNextTraceState|OldRest]],
                       [TS#trace_state_transferable.done || TS <- [TraceState, NextTraceState|Rest]]
                      ]),
-            exit(fok2),
+            exit({not_found2, erlang:get_stacktrace()}),
             true = lists:member(OldNextActiveEvent#event_transferable.actor,
                                 [FC#event_transferable.actor || FC <- FinishedChildren]),
             {ActiveChildren, []}
@@ -2827,7 +2827,7 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
                   [
                    [TS#trace_state_transferable.done || TS <- [TraceState, NextTraceState|Rest]]
                   ]),
-        exit(fok3),
+        exit({not_found3, erlang:get_stacktrace()}),
         {ActiveChildren, []}
     end,
   case UpdatedWuT =:= [] andalso UpdatedActiveChildren =:= [] of
