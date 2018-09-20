@@ -2578,6 +2578,7 @@ update_execution_tree_aux(
                NextChild
               ) of
           {UpdatedTrace, {node_finished, Event}, N} ->
+            exit(impossible5),
             {UpdatedTrace, Prefix ++ Suffix, [Event], N};
           {UpdatedTrace, {maybe_finished, MaybeFinishedChild}, N} ->
             %% case WuT of
@@ -2613,6 +2614,7 @@ update_execution_tree_aux(
           {Prefix, [OldChild|Suffix]} ->
             case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
               {node_finished, Event} ->
+                exit(impossible4),
                 {Prefix ++ Suffix, [Event]};
               {maybe_finished, MaybeFinishedChild} ->
                 %% case ReducedWuT of
