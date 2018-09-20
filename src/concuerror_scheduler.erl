@@ -2555,6 +2555,8 @@ update_execution_tree_aux(
                       [TS#trace_state_transferable.done || TS <- [OldTraceState, OldNextTraceState|OldRest]],
                       [TS#trace_state_transferable.done || TS <- [TraceState, NextTraceState|Rest]]
                      ]),
+            io:fwrite("OldNextTraceStateAll:~p~nNextTraceStateAll:~p~n",
+                      [OldNextTraceState, NextTraceState]),
             exit({not_found, erlang:get_stacktrace()})
         end,
       %% TODO there is a bug here
