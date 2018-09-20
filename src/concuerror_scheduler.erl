@@ -2731,8 +2731,10 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
       {node_finished, _Event} ->
         %% io:fwrite("Node finished:~p~n", [_Ev]),
         %% io:fwrite("============DONE=============~n",[]),
+        exit(1),
         empty;
       {maybe_finished, _Tree} ->
+        exit(2),
         empty;
       UpdatedTree ->
         %% print_tree("", UpdatedTree),
@@ -2813,11 +2815,12 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
           {node_finished, Event} ->
             {Prefix ++ Suffix, [Event]};
           {maybe_finished, MaybeFinishedChild} ->
-            case UpdatedWuT of
-              [] ->
+            case (UpdatedWuT =:= []) and (Prefix =:= []) and (Suffix =:= []) 
+            of
+              true ->
                 %% the child is indeed finished
                 {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
-              _ ->
+              false ->
                 %% the child may not be finished
                 {Prefix ++ [MaybeFinishedChild] ++ Suffix, []}
             end;

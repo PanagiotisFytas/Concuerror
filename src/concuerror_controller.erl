@@ -17,6 +17,7 @@
                             budget_exceeded = 0  :: integer(),
                             ownership_claims = 0 :: integer()
                            }).
+
 %%------------------------------------------------------------------------------
 
 -spec start([node()], concuerror_options:options()) -> concuerror:exit_status().
