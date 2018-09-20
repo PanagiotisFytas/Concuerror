@@ -2548,8 +2548,8 @@ update_execution_tree_aux(
           {P, [NC|S]}
         catch _:_ ->
             ActiveChildrenEv = [C#execution_tree.event  || C <- ActiveChildren],
-            io:fwrite("OldNextActiveEvent~p~nNextActiveEvent~p~nActiveChildren~p~nFinishedChildren~p~n",
-                      [OldNextActiveEvent, NextActiveEvent, ActiveChildrenEv, FinishedChildren]),
+            io:fwrite("OldNextActiveEvent~p~nNextActiveEvent~p~nActiveChildren~p~nFinishedChildren~p~nNextWut~p~n",
+                      [OldNextActiveEvent, NextActiveEvent, ActiveChildrenEv, FinishedChildren, WuT]),
             io:fwrite("OldTraceLeft: ~p~nTraceLeft: ~p~n", 
                      [
                       [TS#trace_state_transferable.done || TS <- [OldTraceState, OldNextTraceState|OldRest]],
@@ -2833,8 +2833,8 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
         %% true = lists:member(NextActiveEvent#event_transferable.actor,
         %%                    [FC#event_transferable.actor || FC <- FinishedChildren]),
         ActiveChildrenEv = [C#execution_tree.event  || C <- ActiveChildren],
-        io:fwrite("OldNextActiveEvent~p~nActiveChildren~p~nFinishedChildren~p~n",
-                  [NextActiveEvent, ActiveChildrenEv, FinishedChildren]),
+        io:fwrite("OldNextActiveEvent~p~nActiveChildren~p~nFinishedChildren~p~nNextWuT~p~n",
+                  [NextActiveEvent, ActiveChildrenEv, FinishedChildren, WuT]),
         io:fwrite("OldTraceLeft: ~p~n", 
                   [
                    [TS#trace_state_transferable.done || TS <- [TraceState, NextTraceState|Rest]]
