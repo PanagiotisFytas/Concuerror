@@ -2346,6 +2346,12 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
       update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree)
     catch
       C:R:S ->
+        io:fwrite("OldTrace~n", []),
+        print_trace(lists:reverse(OldTrace)),
+        io:fwrite("NewTrace~n", []),
+        print_trace(lists:reverse(Trace)),
+        io:fwrite("Tree~n", []),
+        print_tree("",ExecutionTree),
         exit({C,R,S})
     end,
   %% print_trace(RevNewTrace),
@@ -2746,6 +2752,10 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
     end
   catch
     C:R:S ->
+      io:fwrite("TRACE~n",[]),
+      print_trace(lists:reverse(Trace)),
+      io:fwrite("TREE~n", []),
+      print_tree("", ExecutionTree),
       exit({C,R,S})
   end.
 
