@@ -2313,6 +2313,7 @@ print_tree_relative(ExecTree, [TraceState]) ->
     } = TraceState,
   [OldActiveEvent|_] = Done,
   true = logically_equal(OldActiveEvent, Event),
+  exit(impossible4),
   io:fwrite("Node: ~p~n", [Event#event_transferable.actor]),
   [io:fwrite("~sFinishedChild: ~p~n", ["---", Ev#event_transferable.actor]) || Ev <- FinishedChildren],
   [io:fwrite("~sWuT: ~p~n", ["+++", (En#backtrack_entry_transferable.event)#event_transferable.actor]) || En <- WuT];
@@ -2332,15 +2333,18 @@ print_tree_relative(ExecTree, [TraceState, NextTraceState|Rest]) ->
   [OldNextActiveEvent|_] = NextDone,
   [OldActiveEvent|_] = Done,
   true = logically_equal(OldActiveEvent, Event),
-  io:fwrite("Node: ~p~n", [Event#event_transferable.actor]),
-  [io:fwrite("~sFinishedChild: ~p~n", ["---", Ev#event_transferable.actor]) || Ev <- FinishedChildren],
-  [io:fwrite("~sWuT: ~p~n", ["+++", (En#backtrack_entry_transferable.event)#event_transferable.actor]) || En <- WuT],
+  io:fwrite("*************************************************~n", []),
+  io:fwrite("Done:~p~n~WuT:~p~n",[TraceState#trace_state_transferable.done, TraceState#trace_state_transferable.wakeup_tree]),
+  io:fwrite("Node: ~p~n", [Event]),
+  [io:fwrite("~sFinishedChild: ~p~n", ["---", Ev]) || Ev <- FinishedChildren],
+  [io:fwrite("~sWuT: ~p~n", ["+++", (En#backtrack_entry_transferable.event)]) || En <- WuT],
   case split_active_children(OldNextActiveEvent, Children) of
     {Prefix, [OldChild|Suffix]} ->
       print_tree_relative(OldChild, [NextTraceState|Rest]);
     {ActiveChildren, []} ->
       io:fwrite("NOT FOUND!!!!!!~n", []),
-      [io:fwrite("~sActiveChild: ~p~n", ["***",(Ch#execution_tree.event)#event_transferable.actor]) || Ch <- Children]
+      [io:fwrite("~sActiveChild: ~p~n", ["***",(Ch#execution_tree.event)]) || Ch <- Children],
+      io:fwrite("*************************************************~n", [])
   end.
 
     
@@ -2390,7 +2394,7 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
       update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree)
     catch
       C:R:S ->
-        %% io:fwrite("OldTrace~n", []),
+        %%io:fwrite("OldTrace:~n", []),
         %% print_trace(lists:reverse(OldTrace)),
         %% io:fwrite("NewTrace~n", []),
         %% print_trace(lists:reverse(Trace)),
