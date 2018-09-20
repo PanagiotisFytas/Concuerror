@@ -2839,6 +2839,8 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
                   [
                    [TS#trace_state_transferable.done || TS <- [TraceState, NextTraceState|Rest]]
                   ]),
+        io:fwrite("OldNextTraceStateAll:~p~n",
+                  [NextTraceState]),
         exit({not_found3, erlang:get_stacktrace()}),
         {ActiveChildren, []}
     end,
