@@ -2444,14 +2444,15 @@ update_execution_tree_aux(
       {Prefix, [OldChild|Suffix]} ->
         case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
           {node_finished, Event} ->
+            exit(impossible3),
             {Prefix ++ Suffix, [Event]};
           {maybe_finished, MaybeFinishedChild} ->
-            case ReducedWuT of
-              [] ->
-                {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
-              _ ->
-                {Prefix ++ [MaybeFinishedChild] ++ Suffix, []}
-            end;
+            %% case ReducedWuT of
+            %%   [] ->
+            %%     {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
+            %%   _ ->
+            {Prefix ++ [MaybeFinishedChild] ++ Suffix, []};
+            %% end;
           UpdatedChild ->
             {Prefix ++ [UpdatedChild] ++ Suffix, []}
         end;
@@ -2579,12 +2580,12 @@ update_execution_tree_aux(
           {UpdatedTrace, {node_finished, Event}, N} ->
             {UpdatedTrace, Prefix ++ Suffix, [Event], N};
           {UpdatedTrace, {maybe_finished, MaybeFinishedChild}, N} ->
-            case WuT of
-              [] ->
-                {UpdatedTrace, Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event], N};
-              _ ->
-                {UpdatedTrace, Prefix ++ [MaybeFinishedChild] ++ Suffix, [], N}
-            end;
+            %% case WuT of
+            %%   [] ->
+            %%     {UpdatedTrace, Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event], N};
+            %%   _ ->
+            {UpdatedTrace, Prefix ++ [MaybeFinishedChild] ++ Suffix, [], N};
+            %% end;
           {UpdatedTrace, UpdatedChild, N} ->
             {UpdatedTrace, Prefix ++ [UpdatedChild] ++ Suffix, [], N}
         end,
@@ -2614,12 +2615,11 @@ update_execution_tree_aux(
               {node_finished, Event} ->
                 {Prefix ++ Suffix, [Event]};
               {maybe_finished, MaybeFinishedChild} ->
-                case ReducedWuT of
-                  [] ->
-                    {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
-                  _ ->
-                    {Prefix ++ [MaybeFinishedChild] ++ Suffix, []}
-                end;
+                %% case ReducedWuT of
+                %%   [] ->
+                %%     {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
+                %%   _ ->
+                {Prefix ++ [MaybeFinishedChild] ++ Suffix, []};
               UpdatedChild ->
                 {Prefix ++ [UpdatedChild] ++ Suffix, []}
             end;
@@ -2734,8 +2734,9 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
         exit(1),
         empty;
       {maybe_finished, _Tree} ->
-        exit(2),
-        empty;
+        %% exit(2),
+        %% empty;
+        _Tree;
       UpdatedTree ->
         %% print_tree("", UpdatedTree),
         %% io:fwrite("=============================~n",[]),
@@ -2812,18 +2813,18 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
     case split_active_children(NextActiveEvent, ActiveChildren) of
       {Prefix, [NextChild|Suffix]} ->
         case update_execution_tree_done_aux([NextTraceState|Rest], NextChild) of
-          {node_finished, Event} ->
-            {Prefix ++ Suffix, [Event]};
+          %% {node_finished, Event} ->
+          %%   {Prefix ++ Suffix, [Event]};
           {maybe_finished, MaybeFinishedChild} ->
-            case (UpdatedWuT =:= []) and (Prefix =:= []) and (Suffix =:= []) 
-            of
-              true ->
-                %% the child is indeed finished
-                {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
-              false ->
-                %% the child may not be finished
-                {Prefix ++ [MaybeFinishedChild] ++ Suffix, []}
-            end;
+            %% case (UpdatedWuT =:= []) and (Prefix =:= []) and (Suffix =:= []) 
+            %% of
+            %%   true ->
+            %%     %% the child is indeed finished
+            %%     {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
+            %%   false ->
+            %%     %% the child may not be finished
+            {Prefix ++ [MaybeFinishedChild] ++ Suffix, []};
+            %% end;
           UpdatedChild ->
             {Prefix ++ [UpdatedChild] ++ Suffix, []}
         end;
