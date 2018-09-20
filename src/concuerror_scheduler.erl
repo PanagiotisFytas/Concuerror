@@ -2803,7 +2803,7 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
       %% io:fwrite("TRACE~n",[]),
       %% print_trace(lists:reverse(Trace)),
       io:fwrite("TREE~n", []),
-      print_tree(ExecutionTree, lists:reverse(Trace)),
+      print_tree_relative(ExecutionTree, lists:reverse(Trace)),
       exit({C,R,S})
   end.
 
