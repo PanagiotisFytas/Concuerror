@@ -2334,7 +2334,7 @@ print_tree_relative(ExecTree, [TraceState, NextTraceState|Rest]) ->
   [OldActiveEvent|_] = Done,
   true = logically_equal(OldActiveEvent, Event),
   io:fwrite("*************************************************~n", []),
-  io:fwrite("Done:~p~n~WuT:~p~n",[TraceState#trace_state_transferable.done, TraceState#trace_state_transferable.wakeup_tree]),
+  io:fwrite("Done:~p~nWuT:~p~n",[TraceState#trace_state_transferable.done, TraceState#trace_state_transferable.wakeup_tree]),
   io:fwrite("Node: ~p~n", [Event]),
   [io:fwrite("~sFinishedChild: ~p~n", ["---", Ev]) || Ev <- FinishedChildren],
   [io:fwrite("~sWuT: ~p~n", ["+++", (En#backtrack_entry_transferable.event)]) || En <- WuT],
