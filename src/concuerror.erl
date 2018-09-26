@@ -52,10 +52,10 @@ start(Options, LogMsgs) ->
   Logger =
     case Parallel of 
       false ->
-        %% concuerror_logger:start(LoggerOptions);
-        concuerror_logger:start_wrapper([{nodes, [node()]}|LoggerOptions]);
+        concuerror_logger:start(LoggerOptions);
+        %% concuerror_logger:start_wrapper([{nodes, [node()]}|LoggerOptions]);
       true ->
-        ?opt(logger_wrapper, Options)
+        concuerror_logger:start(LoggerOptions)
     end,
   _ = [?log(Logger, Level, Format, Args) || {Level, Format, Args} <- LogMsgs],
   SchedulerOptions = 
@@ -82,7 +82,9 @@ start(Options, LogMsgs) ->
         concuerror_logger:stop(Logger, SchedulerStatus);
         %% concuerror_controller:report_stats(maps:new(), _StartTime, _EndTime);
       true ->
-        Reason
+        SchedulerStatus = get_scheduler_status(Reason, Logger),
+        concuerror_logger:stop(Logger, SchedulerStatus)
+        %%Reason
     end,
   concuerror_estimator:stop(Estimator),
   ets:delete(Processes),
@@ -127,8 +129,8 @@ start_parallel(RawOptions, OldOptions) ->
 	  exit(Status)
     end,
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
-  CombinedStatus = get_combined_status(SchedulerWrappers, LoggerOptions),
-  ExitStatus = concuerror_logger:stop(LoggerWrapper, CombinedStatus),
+  CombinedStatus = get_combined_status_logger(SchedulerWrappers, LoggerOptions),
+  ExitStatus = CombinedStatus, %% concuerror_logger:stop(LoggerWrapper, CombinedStatus),
   ok = concuerror_controller:stop(Controller),
   concuerror_process_spawner:stop(ProcessSpawner),
   ok = concuerror_nodes:clear(Nodes),
@@ -158,6 +160,27 @@ get_combined_status(SchedulerWrappers, Options, Status) ->
           ExitStatus
       end
   end.
+
+get_combined_status_logger(SchedulerWrappers, Options) ->
+  get_combined_status_logger(SchedulerWrappers, Options, normal).
+
+get_combined_status_logger([], _, Status) ->
+  Status;
+get_combined_status_logger(SchedulerWrappers, Options, Status) ->
+  receive
+    {'DOWN', Ref, process, Pid, ExitStatus} ->
+      true = lists:member({Pid, Ref}, SchedulerWrappers),
+      Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
+      case ExitStatus of
+        ok ->
+          get_combined_status(Rest, Status);
+        error ->
+          get_combined_status(Rest, error);
+        fail ->
+          ExitStatus
+      end
+  end.
+
 
 %%------------------------------------------------------------------------------
 
