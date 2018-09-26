@@ -3046,9 +3046,9 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
   [UnloadedBacktrackEvent|RestBacktrackEvents] = Eventify,
   UpdatedTraceState =
     TraceState#trace_state_transferable{
-      sleep_set = [UnloadedBacktrackEvent|SleepSet],
+      %%sleep_set = [UnloadedBacktrackEvent|SleepSet],
       wakeup_tree = RestBacktrack
-      %% done = [H, UnloadedBacktrackEvent|T]
+      done = [H, UnloadedBacktrackEvent|T]
      },
   NewFragmentTraceState =
     TraceState#trace_state_transferable{
