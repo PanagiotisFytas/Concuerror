@@ -349,6 +349,12 @@ explore_scheduling(State) ->
   RacesDetectedState = plan_more_interleavings(LogState),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
   %% io:fwrite("State ~n~p~n", [NewState]), %% TODO remove
+  %% case State#scheduler_state.interleaving_id of
+  %%   6 ->
+  %%     print_all(NewState);
+  %%   _ ->
+  %%     ok
+  %% end,
   case HasMore of
     true -> explore_scheduling(NewState);
     false -> ok%exit(UpdatedState) %% TODO put ok
@@ -374,12 +380,21 @@ explore_scheduling(State) ->
 explore_scheduling_parallel(State) ->
   UpdatedState = explore(State),
   #scheduler_state{
+     interleaving_id = IID,
      interleavings_explored = IE
     } = State,
   LogState = log_trace(UpdatedState),
   RacesDetectedState = plan_more_interleavings(LogState),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
-  print_all_wut(NewState),
+  %% case (IID =:= 3) andalso ((IID =:= 3) andalso (State#scheduler_state.scheduler_number =:= 3)) of
+  %%   true ->
+  %%     io:fwrite("IID ~w SN ~w ~n", [IID, State#scheduler_state.scheduler_number =:= 1]),
+  %%     print_all(NewState);
+  %%     %%exit(test);
+  %%   false ->
+  %%     ok
+  %% end,
+  %% print_all_wut(NewState),
   %% io:fwrite("~p~n", [NewState]),
   Controller = NewState#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
@@ -985,7 +1000,28 @@ update_state(#event{actor = Actor} = Event, State) ->
     } = Last,
   ?debug(Logger, "~s~n", [?pretty_s(Index, Event)]),
   concuerror_logger:graph_new_node(Logger, UID, Index, Event),
-  Done = reset_receive_done(RawDone, State),
+  Done =
+    case Parallel andalso DPOR =:= optimal of
+      false ->
+        reset_receive_done(RawDone, State);
+      true ->
+        %% TODO check if this is correct
+        {NewLastWuT, NextWuT} =
+          case WakeupTree of
+            [] -> {[], []};
+            [#backtrack_entry{wakeup_tree = NWT_}|Rest_] ->
+              {Rest_, NWT_}  
+          end,
+        {_, NotOwnedWuT, _} = split_wut(WakeupTree),
+        NotOwnedEvents = [Entry#backtrack_entry.event || Entry <- NotOwnedWuT],
+        ResetedDone = reset_receive_done(RawDone, State),
+        case ResetedDone of
+          [] ->
+            NotOwnedEvents;
+          [H|T] ->
+            [H|NotOwnedEvents++T]
+        end
+    end,
   NextSleepSet =
     case UseSleepSets of
       true ->
@@ -2574,14 +2610,62 @@ print_wut(Prefix, [Entry|Rest]) ->
   Ownership = Entry#backtrack_entry.ownership,
   io:fwrite("~s~p ~p~n", [Prefix ++ "|-> ", Actor, Ownership]),
   Pad =
-  case Rest of
-    [] ->
-      "    ";
-    _ ->
-      "|   "
-  end,
+    case Rest of
+      [] ->
+        "    ";
+      _ ->
+        "|   "
+    end,
   print_wut(Prefix ++ Pad, Entry#backtrack_entry.wakeup_tree),
   print_wut(Prefix, Rest).
+
+print_all(State) ->
+  print_all_rev(lists:reverse(State#scheduler_state.trace)).
+
+print_all_rev([]) ->
+  ok;
+print_all_rev(
+  [#trace_state{
+      done = Done,
+      wakeup_tree = WuT,
+      sleep_set = SleepSet,
+      unique_id = {_, Step}
+     } = _|Rest]
+ ) ->
+  Intro =
+    io_lib:format("***************Step ~w***************", [Step]),
+  io:fwrite(
+    "~s~nDone:~n~s~nWuT:~n~sSleep:~n~s~n",
+    [Intro, format_events(Done), format_wut("", WuT), format_events(SleepSet)]
+   ),
+  print_all_rev(Rest).
+
+format_events([]) ->
+  "Empty";
+format_events([Event]) ->
+  io_lib:format("{~p, ~p}", [Event#event.actor, Event#event.event_info]);
+format_events([Event|Rest]) ->
+  io_lib:format("{~p, ~p},~n", [Event#event.actor, Event#event.event_info])
+    ++ format_events(Rest).
+
+
+format_wut(_, []) ->
+  "";
+format_wut(Prefix, [Entry|Rest]) ->
+  Event = Entry#backtrack_entry.event,
+  Actor = Event#event.actor,
+  Ownership = Entry#backtrack_entry.ownership,
+  Str = io_lib:format("~s~p ~p~n", [Prefix ++ "|-> ", Actor, Ownership]),
+  Pad =
+    case Rest of
+      [] ->
+        "    ";
+      _ ->
+        "|   "
+    end,
+  Str
+    ++ format_wut(Prefix ++ Pad, Entry#backtrack_entry.wakeup_tree)
+    ++ format_wut(Prefix, Rest).
   
 %%------------------------------------------------------------------------------
 
@@ -2715,8 +2799,8 @@ update_execution_tree_aux(
   %% the fragment and be removed from the wakeup_tree. Otherwise, this
   %% fragment claims ownership over them, the owneship of those entries  gets
   %% modified accordingly and they are inserted in the wakeup_tree of the central
-  %% tree.
-  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT, [], [], []),
+  %% tree
+  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
   %NotOwnedWuT = [], %% for the time being, this should hold true for source
   %% TODO : remove this check
   %% ok = assert_equal_wut(OwnedWuT, OldNextWuT), <- this assertion is only correct if
@@ -2839,11 +2923,31 @@ get_finished_wut(OldWuT, WuT, ActiveEvent) ->
     end,
   lists:filter(Pred, OldWuT -- WuT).  
 
+split_wut([]) ->
+  {[], [], []};
+split_wut([#backtrack_entry{}|_] = WuT) ->
+  split_wut(WuT, [], [], []);
+split_wut([#backtrack_entry_transferable{}|_] = WuT) ->
+  split_wut_transferable(WuT, [], [], []).
+
+split_wut_transferable([], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
+  {OwnedWuT, NotOwnedWuT, DisputedWuT};
+%% TODO check if I need to reverse these
+split_wut_transferable([Entry|Rest], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
+  case Entry#backtrack_entry_transferable.ownership of
+    owned->
+      split_wut_transferable(Rest, [Entry|OwnedWuT], NotOwnedWuT, DisputedWuT);
+    not_owned ->
+      split_wut_transferable(Rest, OwnedWuT, [Entry|NotOwnedWuT], DisputedWuT);
+    disputed ->
+      split_wut_transferable(Rest, OwnedWuT, NotOwnedWuT, [Entry|DisputedWuT])
+  end.
+
 split_wut([], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
   {OwnedWuT, NotOwnedWuT, DisputedWuT};
 %% TODO check if I need to reverse these
 split_wut([Entry|Rest], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
-  case Entry#backtrack_entry_transferable.ownership of
+  case Entry#backtrack_entry.ownership of
     owned->
       split_wut(Rest, [Entry|OwnedWuT], NotOwnedWuT, DisputedWuT);
     not_owned ->
@@ -3131,7 +3235,7 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
   %%     done = [H|RestBacktrackEvents] ++ T
   %%    },
   %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
-  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(WuT, [], [], []),
+  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(WuT),
   DisputedWuT = [],
   case OwnedWuT =:= [] of
     true ->
@@ -3187,7 +3291,7 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
   %%     done = [H|RestBacktrackEvents] ++ T
   %%    },
   %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
-  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(WuT, [], [], []),
+  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(WuT),
   DisputedWuT = [],
   case OwnedWuT =:= [] of
     true ->
