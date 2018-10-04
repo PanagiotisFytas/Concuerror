@@ -501,7 +501,7 @@ size_of_backtrack([TraceState|Rest]) ->
 size_of_backtrack_aux([]) -> 0;
 size_of_backtrack_aux([BacktrackEntry|Rest]) ->
   Count =
-    case BacktrackEntry#backtrack_entry.ownership of
+    case determine_ownership(BacktrackEntry) of
       owned ->
         1;
       not_owned ->
@@ -520,7 +520,7 @@ size_of_backtrack_transferable([TraceState|Rest]) ->
 size_of_backtrack_transferable_aux([]) -> 0;
 size_of_backtrack_transferable_aux([BacktrackEntry|Rest]) ->
   Count =
-    case BacktrackEntry#backtrack_entry_transferable.ownership of
+    case determine_ownership(BacktrackEntry) of
       owned ->
         1;
       not_owned ->
@@ -738,13 +738,15 @@ get_next_event(#scheduler_state{
     [] ->
       Event = #event{label = make_ref()},
       get_next_event(Event, State);
-    [#backtrack_entry{event = Event, origin = N, ownership = owned}|_] ->
+    [#backtrack_entry{event = Event, origin = N} = H|_] 
+    when determine_ownership(H) =:= owned ->
       ?debug(
          _Logger,
          "New interleaving detected in ~p (diverge @ ~p)~n",
          [N, _I]),
       get_next_event(Event, State#scheduler_state{origin = N});
-    [#backtrack_entry{event = Event, origin = N, ownership = disputed}|_] ->
+    [#backtrack_entry{event = Event, origin = N} = H|_]
+    when determine_ownership(H) =:= disputed ->
       case Last#trace_state.ownership of
         true ->
           ?debug(
@@ -757,7 +759,7 @@ get_next_event(#scheduler_state{
           get_next_event(Ev, State)
           %% exit({impossible5, _Other})
       end;
-    [#backtrack_entry{ownership = not_owned}|_] ->
+    [#backtrack_entry{}|_] ->
       Event = #event{label = make_ref()},
       get_next_event(Event, State)
   end;
@@ -1059,6 +1061,23 @@ update_state(#event{actor = Actor} = Event, State) ->
   ?trace(Logger, "  Next bound: ~p~n", [NewSchedulingBound]),
   NewLastDone = [Event|Done],
   NextIndex = Index + 1,
+  NextTraceOwnership =
+    case Parallel andalso DPOR =:= optimal of
+      true ->
+        case Last#trace_state.ownership of
+          true ->
+            true;
+          false ->
+            case NextWakeupTree of
+              [] ->
+                true;
+              _ ->
+                false
+            end;
+          end;
+      false ->
+        true
+    end,
   InitNextTrace =
     #trace_state{
        actors      = Actors,
@@ -1067,7 +1086,8 @@ update_state(#event{actor = Actor} = Event, State) ->
        scheduling_bound = NewSchedulingBound,
        sleep_set   = NextSleepSet,
        unique_id   = {InterleavingId, NextIndex},
-       wakeup_tree = NextWakeupTree
+       wakeup_tree = NextWakeupTree,
+       ownership = NextTraceOwnership
       },
   NewLastTrace =
     Last#trace_state{
@@ -1574,9 +1594,9 @@ update_trace(
                       Ownership =
                         case TraceState#trace_state.ownership of
                           false ->
-                            owned;
+                            trace_not_owned;
                           true ->
-                            owned
+                            trace_owned
                           end,
                       {insert_wakeup_optimal_parallel(SleepSet, Wakeup, NotDep, Bound, Origin, Ownership), false}
                     end;
@@ -1899,8 +1919,8 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, Ownership) ->
                 #backtrack_entry{
                    event = Event,
                    origin = M,
-                   ownership = determine_ownership(Ownership, NewTree),
-                   %% makes sure the the ownership at the parents gets adjusted
+                   %% ownership = determine_ownership(Ownership, NewTree),
+                   %% %% makes sure the the ownership at the parents gets adjusted
                    wakeup_tree = NewTree
                 },
               [Entry|Rest]
@@ -1913,20 +1933,18 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, Ownership) ->
 %% Otherwise, no children entries are owned (one of them must be disputed because
 %% a wakeup_tree insertion has occured) then parent node is considered disputed
 %% as well.
-determine_ownership(owned, _) ->
-  %% here the trace is owned so the wakeup_tree is owned as well
-  owned;
-determine_ownership(_, []) ->
-  disputed;
-determine_ownership(_, [#backtrack_entry{ownership = owned} = _|_]) ->
-  owned;
-determine_ownership(TraceOwnership, [#backtrack_entry{ownership = Ownership} = _|Rest])
-  when
-    Ownership =:= disputed;
-    Ownership =:= not_owned ->
- determine_ownership(TraceOwnership, Rest).
-
-  
+%% determine_ownership(owned, _) ->
+%%   %% here the trace is owned so the wakeup_tree is owned as well
+%%   owned;
+%% determine_ownership(_, []) ->
+%%   disputed;
+%% determine_ownership(_, [#backtrack_entry{ownership = owned} = _|_]) ->
+%%   owned;
+%% determine_ownership(TraceOwnership, [#backtrack_entry{ownership = Ownership} = _|Rest])
+%%   when
+%%     Ownership =:= disputed;
+%%     Ownership =:= not_owned ->
+%%  determine_ownership(TraceOwnership, Rest).
 
 backtrackify(Seq, Cause) ->
   Fold =
@@ -1938,11 +1956,24 @@ backtrackify(Seq, Cause) ->
 backtrackify(Seq, Cause, Ownership) ->
   Fold =
     fun(Event, Acc) ->
+        EntryOwnership =
+          case Acc =:= [] of
+            true ->
+              %% this is a leaf entry
+              case Ownership of
+                trace_owned ->
+                  owned;
+                trace_not_owned ->
+                  disputed
+              end;
+            false ->
+              not_owned
+          end,
         [#backtrack_entry{
             event = Event,
             origin = Cause,
             wakeup_tree = Acc,
-            ownership = Ownership
+            ownership = EntryOwnership
            }]
     end,
   lists:foldr(Fold, [], Seq).
@@ -2108,7 +2139,7 @@ find_prefix_parallel_optimal([TraceState|Rest]) ->
       %% owned < disputed < not_owned
       SortedTree = sort_wut(Tree),
       [H|_] = SortedTree,
-      case H#backtrack_entry.ownership =:= not_owned of
+      case determine_ownership(H) =:= not_owned of
         true ->
           %% no owned or disputed backtrack entries
           find_prefix_parallel_optimal(Rest);
@@ -2120,14 +2151,14 @@ find_prefix_parallel_optimal([TraceState|Rest]) ->
 sort_wut(WuT) ->
   SortFun =
     fun(A, B) ->
-        #backtrack_entry{ownership = OwnershipA} = A,
+        OwnershipA = determine_ownership(A),
         case OwnershipA of
           owned ->
             true;
           not_owned ->
             false;
           disputed ->
-            #backtrack_entry{ownership = OwnershipB} = B,
+            OwnershipB = determine_ownership(B),
             case OwnershipB of
               owned ->
                 false;
@@ -2139,6 +2170,48 @@ sort_wut(WuT) ->
         end
     end,
   lists:sort(SortFun, WuT).
+
+%% returns owned if at least one leaf entry
+%% is owned or disputed if at least one is
+%% disputed else returns not_owned
+determine_ownership(
+  #backtrack_entry{
+     ownership = Ownership,
+     wakeup_tree = []
+    } = _) ->
+  Ownership;
+determine_ownership(
+  #backtrack_entry_transferable{
+     ownership = Ownership,
+     wakeup_tree = []
+    } = _) ->
+  Ownership;
+determine_ownership(
+  #backtrack_entry{
+     ownership = Ownership,
+     wakeup_tree = NextWuT
+    } = _) ->
+  Ownership = not_owned,
+  determine_ownership(NextWuT, not_owned);
+determine_ownership(
+  #backtrack_entry_transferable{
+     ownership = Ownership,
+     wakeup_tree = NextWuT
+    } = _) ->
+  Ownership = not_owned,
+  determine_ownership(NextWuT, not_owned).
+
+determine_ownership([], TempOwnership) ->
+  TempOwnership;
+determine_ownership([Entry|Rest], TempOwnership) ->
+  case determine_ownership(Entry) of
+    disputed ->
+      disputed;
+    owned ->
+      determine_ownership(Rest, owned);
+    _ ->
+      determine_ownership(Rest, TempOwnership)
+  end.
 
 replay(#scheduler_state{need_to_replay = false} = State) ->
   State;
@@ -2934,7 +3007,7 @@ split_wut_transferable([], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
   {OwnedWuT, NotOwnedWuT, DisputedWuT};
 %% TODO check if I need to reverse these
 split_wut_transferable([Entry|Rest], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
-  case Entry#backtrack_entry_transferable.ownership of
+  case determine_ownership(Entry) of
     owned->
       split_wut_transferable(Rest, [Entry|OwnedWuT], NotOwnedWuT, DisputedWuT);
     not_owned ->
@@ -2947,7 +3020,7 @@ split_wut([], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
   {OwnedWuT, NotOwnedWuT, DisputedWuT};
 %% TODO check if I need to reverse these
 split_wut([Entry|Rest], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
-  case Entry#backtrack_entry.ownership of
+  case determine_ownership(Entry) of
     owned->
       split_wut(Rest, [Entry|OwnedWuT], NotOwnedWuT, DisputedWuT);
     not_owned ->
