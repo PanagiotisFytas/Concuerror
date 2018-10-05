@@ -227,12 +227,10 @@
 %% TODO: add what was previous called exploring and warnings 
 
 -record(execution_tree, {
-          active_children         = [] :: [execution_tree()],
+          children         = [] :: [execution_tree()],
           finished_children       = [] :: [event_transferable()],
-          finished_next_wut       = [] :: event_tree_transferable(),
           event                        :: event_transferable(),
           fragments_acessing_node = 1  :: non_neg_integer(),
-          next_wakeup_tree        = [] :: event_tree_transferable()
          }).
 
 -type execution_tree() :: #execution_tree{} | empty.
@@ -2616,18 +2614,34 @@ initialize_execution_tree_aux([TraceState, NextTraceState|Rest]) ->
     } = NextTraceState,
   [_ActiveChild|FinishedChildren] = NextDone,
   #execution_tree{
-     active_children = [initialize_execution_tree_aux([NextTraceState|Rest])],
-     finished_children = FinishedChildren,
+     children = 
+       wut_to_exec_tree(NextWuT) ++ [initialize_execution_tree_aux([NextTraceState|Rest])],
+     %% finished_children = FinishedChildren,
      event = ActiveEvent,
-     next_wakeup_tree = NextWuT
     }.
+
+wut_to_exec_tree([]) ->
+  [];
+wut_to_exec_tree([Entry|Rest]) ->
+  [wut_to_exec_tree_aux(Entry)|wut_to_exec_tree(Rest)].
+
+wut_to_exec_tree_aux(
+  #backtrack_entry_transferable{
+     event = Event,
+     wakeup_tree = WuT
+    } = _Entry) ->
+  #execution_tree{
+     event = Event,
+     children = wut_to_exec_tree(WuT)
+    }.
+
 
 %%------------------------------------------------------------------------------
 -spec print_tree(term(), term()) -> term().
 
 print_tree(Prefix, ExecTree) ->
   #execution_tree{
-     active_children = Children,
+     children = Children,
      finished_children = FinishedChildren,
      event = Event,
      next_wakeup_tree = WuT
@@ -2755,19 +2769,8 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
      backtrack_size = BacktrackSize,
      trace = Trace
     } = Fragment,
-  %% io:fwrite("============UPDT=============~n",[]),
-  %% print_tree("", ExecutionTree),
-  %% io:fwrite("~n"),
-  %% print_trace(lists:reverse(OldTrace)),
-  %% io:fwrite("~n"),
-  %% print_trace(lists:reverse(Trace)),
-  %% io:fwrite("~n"),
   {RevNewTrace, NewExecutionTree, BacktrackEntriesRemoved} =
     update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree),
-  %% print_trace(RevNewTrace),
-  %% io:fwrite("~n"),
-  %% print_tree("", NewExecutionTree),
-  %% io:fwrite("=============================~n",[]),
   EntriesLeft = BacktrackSize - BacktrackEntriesRemoved,
   EntriesLeft = size_of_backtrack_transferable(lists:reverse(RevNewTrace)),
   OwnershipFixedFragment =
@@ -2851,10 +2854,9 @@ update_execution_tree_aux(
      wakeup_tree = NextWuT
     } = NextTraceState,
   #execution_tree{
-     active_children = ActiveChildren,
-     finished_children = FinishedChildren,
-     event = ActiveEvent,
-     next_wakeup_tree = WuT
+     children = Children,
+     %% finished_children = FinishedChildren,
+     event = ActiveEvent
     } = ExecutionTree,
   %% TODO : maybe remove this check
   [OldActiveEvent2|_] = OldDone,
@@ -2863,25 +2865,20 @@ update_execution_tree_aux(
   true = logically_equal(OldActiveEvent2, ActiveEvent),
   [NextActiveEvent|_NextFinishedEvents] = NextDone,
   [OldNextActiveEvent|_] = OldNextDone,
-  %% I may find some extra entries
-  %% at the NextWuT compared to the OldNextWuT. Those entries are the backtrack
-  %% points that this fragment will need to request ownership for. If those 
-  %% entries are found in the WuT, the ActiveChildren or the FinishedChildren
-  %% of the execution_tree, then some other fragment
-  %% has claimed ownership and therefore they must be added to the sleep-set of
-  %% the fragment and be removed from the wakeup_tree. Otherwise, this
-  %% fragment claims ownership over them, the owneship of those entries  gets
-  %% modified accordingly and they are inserted in the wakeup_tree of the central
-  %% tree
+  
   {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
-  %NotOwnedWuT = [], %% for the time being, this should hold true for source
-  %% TODO : remove this check
-  %% ok = assert_equal_wut(OwnedWuT, OldNextWuT), <- this assertion is only correct if
-  %% the next events  are logically equal (else OwnedWuT could be smaller than OldNextWuT)
-  WuTEvents = [Entry#backtrack_entry_transferable.event || Entry <- WuT],
-  ActiveEvents = [Node#execution_tree.event || Node <- ActiveChildren],
+  %% when a disputed wut becomes owned new children must be added
   {NewOwnedWuT, NewNotOwnedWuT} =
-    get_ownership(DisputedWuT, WuTEvents ++ ActiveEvents ++ FinishedChildren, [], []),
+    get_ownership(DisputedWuT, Children, [], []),
+  WuTInsertedChildren =
+    case NextTraceState#trace_state.ownership of
+      true ->
+        insert_wut_into_children(OwnedWuT, Children);
+      %% maybe insert OwnedWut into children
+      false ->
+        insert_wut_into_children(NewOwnedWuT, Children)
+        %% insert disputed wut
+    end
   NewNotOwnedEvents = [Entry#backtrack_entry_transferable.event || Entry <- NewNotOwnedWuT],
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
@@ -2895,96 +2892,125 @@ update_execution_tree_aux(
       %% Find the subtree that needs to be modified
       {Prefix, [NextChild|Suffix]} = 
         try 
-          {P, [NC|S]} = split_active_children(NextActiveEvent, ActiveChildren),
+          {P, [NC|S]} = split_children(NextActiveEvent, WuTInsertedChildren),
           {P, [NC|S]}
         catch _:_ ->
             io:fwrite("NextActiveEvent~p~nActiveChildren~p~n", [NextActiveEvent, ActiveChildren]),
-            exit(fok)
+            exit(not_found1)
         end,
-      %% TODO there is a bug here
-      %% try split_active_children(NextActiveEvent, ActiveChildren)
-      %% catch _:_ ->
-      %%     print_tree("", ExecutionTree),
-      %%     io:fwrite("~n"),
-      %%     print_trace([OldTraceState, OldNextTraceState|OldRest]),
-      %%     io:fwrite("~n"),
-      %%     print_trace([TraceState, NextTraceState|Rest]),
-      %%     io:fwrite("~n"),
-      %%     exit(fok)
-      %% end,
-      {[UpdatedNextTraceState|UpdatedRest], UpdatedActiveChildren, MaybeNewFinishedChild, EntriesRemoved} =
+      {[UpdatedNextTraceState|UpdatedRest], UpdatedChildren, MaybeNewFinishedChild, EntriesRemoved} =
         case update_execution_tree_aux(
                [OldNextTraceState|OldRest],
                [UpdatedNextTraceState|Rest],
                NextChild
               ) of
           {UpdatedTrace, {node_finished, Event}, N} ->
-            %% io:fwrite("~n~p~n~p~n~p~n~p~n~p~n~p~n~p~n~p~n~p~n",
-            %%           [[OldTraceState, OldNextTraceState|OldRest],
-            %%            '----------------------------------------------------------------------------------',
-            %%            [TraceState, NextTraceState|Rest],
-            %%            '----------------------------------------------------------------------------------',
-            %%            UpdatedTrace,
-            %%            '----------------------------------------------------------------------------------',
-            %%            ExecutionTree,
-            %%            '----------------------------------------------------------------------------------',
-            %%            {node_finished, Event}]), %% TODO : remove this check , this part of the branch is probably not needed
-            
-            %% exit(impossible3),
+            exit(impossible3),
             {UpdatedTrace, Prefix ++ Suffix, [Event], N};
           {UpdatedTrace, UpdatedChild, N} ->
             {UpdatedTrace, Prefix ++ [UpdatedChild] ++ Suffix, [], N}
         end,
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
-          active_children = UpdatedActiveChildren,
-          finished_children = MaybeNewFinishedChild ++ FinishedChildren,
-          next_wakeup_tree = WuT ++ NewOwnedWuT
+          children = UpdatedChildren,
+          %% finished_children = MaybeNewFinishedChild ++ FinishedChildren,
          },
       {[TraceState, UpdatedNextTraceState|UpdatedRest], UpdatedExecutionTree, EntriesRemoved + length(NewNotOwnedEvents)};
     false ->
-      %% The subtree of the active_children that corresponds to the OldNextActiveEvent
-      %% needs to be modified (perhaps even be deleted),
-      %% since this suffix of the trace_state is considered done. Also another subtree
-      %% that corresponds to the NextActiveEvent needs to be created and be put to the
-      %% active_children list
-      {UpdatedActiveChildren, MaybeNewFinishedChild} =
-        case split_active_children(OldNextActiveEvent, ActiveChildren) of
+      {UpdatedChildren, MaybeNewFinishedChild} =
+        case split_children(OldNextActiveEvent, WuTInsertedChildren) of
           {Prefix, [OldChild|Suffix]} ->
-            case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
-              {node_finished, Event} ->
-                {Prefix ++ Suffix, [Event]};
-              UpdatedChild ->
-                {Prefix ++ [UpdatedChild] ++ Suffix, []}
-            end;
-          {ActiveChildren, []} ->
+            %% case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
+            %%   {node_finished, Event} ->
+            %%     {Prefix ++ Suffix, [Event]};
+            %%   UpdatedChild ->
+            %%     {Prefix ++ [UpdatedChild] ++ Suffix, []}
+            %% end;
+            %% for the time no garbage control
+            {Prefix ++ [OldChild] ++ Suffix, []};
+          {WuTInsertedChildren, []} ->
             %% TODO : maybe remove these checks
+            exit(not_found2),
             [] = OldRest,
             true = lists:member(OldNextActiveEvent#event_transferable.actor,
                                 [FC#event_transferable.actor || FC <- FinishedChildren]),
             {ActiveChildren, []}
         end,
-      %% The WuT of the central tree is modified to account for the events
-      %% of the backtrack of the initial fragment that were explored
-      %% NewFinishedChilren = get_finished_children_from_done(NextFinishedEvents, WuT),
-      %% ReducedWuT = get_reduced_wut_from_done(NextDone, WuT),
-      FinishedWuT = get_finished_wut(OldNextWuT, NextWuT, NextActiveEvent),
-      {NewFinishedChilren, ReducedWuT} = get_finished_children_from_wut(FinishedWuT, WuT),
+      %% FinishedWuT = get_finished_wut(OldNextWuT, NextWuT, NextActiveEvent),
+      %% {NewFinishedChilren, ReducedWuT} = get_finished_children_from_wut(FinishedWuT, WuT),
       %% Pr =
       %%   fun(Elem) ->
       %%       Elem#backtrack_entry_transferable.ownership =/= owned
       %%   end,
       %% false = lists:any(Pr, FinishedWuT), %% TODO remove this assertion
-      NewActiveChild = initialize_execution_tree_aux([NextTraceState|Rest]),
+      TraceInsertedChildren = insert_new_trace([NextTraceState|Rest], UpdatedChildren),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
-          active_children = [NewActiveChild|UpdatedActiveChildren],
-          finished_children =
-            MaybeNewFinishedChild ++ NewFinishedChilren ++ FinishedChildren,
-          next_wakeup_tree = ReducedWuT ++ NewOwnedWuT %% This is NOT OKAY WuT needs to be reduced
+          children = TraceInsertedChildren
+          %% finished_children =
+          %%   MaybeNewFinishedChild ++ NewFinishedChilren ++ FinishedChildren,
+          %% next_wakeup_tree = ReducedWuT ++ NewOwnedWuT %% This is NOT OKAY WuT needs to be reduced
          },
       {[TraceState, UpdatedNextTraceState|Rest], UpdatedExecutionTree, length(NewNotOwnedEvents)}
   end.
+
+insert_new_trace([TraceState], Nodes) ->
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  [Event|_] = Done,
+  case split_children(Event, Nodes) of
+    {Prefix, [Child|Suffix]} ->
+      Nodes;
+    {Nodes, []} ->
+      [#execution_tree{event = Event}|Nodes] 
+  end;
+insert_new_trace([TraceState, NextTraceState|Rest], Nodes) ->
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  #trace_state_transferable{
+     wakeup_tree = NextWuT
+    } = NextTraceState,
+  [Event|_] = Done,
+  case split_children(Event, Nodes) of
+    {Prefix, [Child|Suffix]} ->
+      %% TraceState is on the same level as child
+      #execution_tree{
+         %% logically equal with event here
+         children = NextChildren
+        } = Child,
+      WuTInsertedNextChildren = insert_wut_into_children(NextWuT, NextChildren),
+      UpdatedChild#execution_tree{
+        children = insert_new_trace([NextTraceState|Rest], WuTInsertedNextChildren)
+       },  
+      Prefix ++ UpdatedChild ++ Suffix;
+    {Nodes, []} ->
+      [insert_completely_new_trace([NextTraceState|Rest])|Nodes]
+  end.
+
+insert_completely_new_trace([TraceState]) ->
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  [Event|_] = Done,
+  #execution_tree{
+     event = Event
+    }.
+
+insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
+  #trace_state_transferable{
+     done = Done
+    } = TraceState,
+  #trace_state_transferable{
+     wakeup_tree = NextWuT
+    } = NextTraceState,
+  [Event|_] = Done,
+  #execution_tree{
+     event = Event,
+     children =
+       [insert_completely_new_trace(NextTraceState|Rest)|wut_to_exec_tree(NextWuT)]
+    }.
 
 get_finished_wut(OldWuT, WuT, ActiveEvent) ->
   ActiveActor = ActiveEvent#event_transferable.actor,
@@ -3030,32 +3056,112 @@ split_wut([Entry|Rest], OwnedWuT, NotOwnedWuT, DisputedWuT) ->
   end.
 
 get_ownership(DisputedWuT, [], NewOwnedWuT, NotOwnedWuT) ->
-  %% owneship is claimed
-  OwnedWut =
-    [Entry#backtrack_entry_transferable{ownership = owned} || Entry <- DisputedWuT],
+  OwnedWut = fix_ownership(DisputedWuT, disputed, owned),
   {OwnedWut ++ NewOwnedWuT, NotOwnedWuT};
 get_ownership([], _, NewOwnedWuT, NotOwnedWuT) ->
   {NewOwnedWuT, NotOwnedWuT};
-get_ownership([Entry|RestWuT], Events, NewOwnedWuT, NotOwnedWuT) ->
-  Pred =
-    fun(Event) ->
-        not same_actor(Event, Entry#backtrack_entry_transferable.event)
-    end,
-  case lists:splitwith(Pred, Events) of
-    {_AllEvents, []} ->
-      %% ownership is claimed
-      OwnedEntry = Entry#backtrack_entry_transferable{ownership = owned},
-      get_ownership(RestWuT, Events, [OwnedEntry|NewOwnedWuT], NotOwnedWuT);
-    {Prefix, [_EqualEvent|Suffix]} ->
-      %% ownership is not claimed
-      %% TODO check this !!!! ASAP : 
-      %% The fact that I add EqualEvent and not NotOwnedEvent leads to more sleep set blocked
-      %%NotOwnedEvent = #event_transferable{actor = EqualEvent#event_transferable.actor},
-      %% I am doing this in order to not carry unecessary info about the event
-      %% TODO make sure that it is okay to do this
-      NotOwnedEntry = Entry#backtrack_entry_transferable{ownership = not_owned},
-      get_ownership(RestWuT, Prefix ++ Suffix, NewOwnedWuT, [NotOwnedEntry|NotOwnedWuT])
+get_ownership([DisputedEntry|Rest], Children, NewOwnedWuT, NotOwnedWuT) ->
+  case get_ownership_aux(DisputedEntry, Children) of
+    {owned, OwnedEntry, ChildrenLeft} ->
+      get_ownership(Rest, ChildrenLeft, [OwnedEntry|NewOwnedWuT], NotOwnedWuT);
+    {not_owned, NotOwnedEntry, ChildrenLeft} ->
+      get_ownership(Rest, ChildrenLeft, NewOwnedWuT, NotOwnedWuT)
   end.
+
+get_ownership_aux(
+  #backtrack_entry_transferable{
+     event = Event,
+     wakeup_tree = [],
+     ownership = disputed
+    } = DisputedEntry,
+  Children
+ ) ->
+  case split_children(Event, Children) of
+    {Prefix, [Child|Suffix]} ->
+      {not_owned, fix_ownership([DisputedEntry], displuted, not_owned), Prefix ++ Suffix};
+    {Children, []} ->
+      {owned, fix_ownership([DisputedEntry], disputed, owned), Children}
+  end;  
+get_ownership_aux(
+  #backtrack_entry_transferable{
+     event = Event,
+     wakeup_tree = WuT
+    } = DisputedEntry,
+  Children
+ ) ->
+  case split_children(Event, Children) of
+    {Prefix, [Child|Suffix]} ->
+      {NewOwnedWuT, NewNotOwnedWuT} =
+        get_ownership(WuT, Child#execution_tree.children, [], []),
+      FixedEntry =
+        DisputedEntry#backtrack_entry_transferable{
+          wakeup_tree = NewOwnedWuT ++ NewNotOwnedWuT
+         },
+      case NewOwnedWuT of
+        [] ->
+          {not_owned, FixedEntry, Prefix ++ Suffix};
+        _ ->
+          {owned, FixedEntry, Prefix ++ Suffix}
+      end;
+    {Children, []} ->
+      %% TODO : maybe remove these checks
+      {owned, fix_ownership([DisputedEntry], disputed, owned), Children}
+  end.
+
+fix_ownership([], _, _) ->
+  [];
+fix_ownership([Entry|Rest], From, To) ->
+  #backtrack_entry_transferable{
+     ownership = Ownership,
+     wakeup_tree = WuT
+    },
+  FixedOwnership =
+    case Ownership of
+      From ->
+        To;
+      _ ->
+        Ownership
+    end,
+  FixedEntry =
+    Entry#backtrack_entry_transferable{
+      ownership = FixedOwnership,
+      wakeup_tree = fix_ownership(WuT)
+     },
+  [FixedEntry|fix_ownership(Rest)].
+
+insert_wut_into_children([], Children) ->
+  [];
+insert_wut_into_children(WuT, []) ->
+  wut_to_exec_tree(WuT);
+insert_wut_into_children([Entry|Rest], Children) ->
+  {UpdatedOrNewChild, ChildrenLeft} = insert_wut_into_children_aux(Entry, Children),
+  [UpdatedOrNewChild|insert_wut_into_children(Rest, ChildrenLeft).
+
+insert_wut_into_children_aux(
+  #backtrack_entry_transferable{
+     event = Event,
+     wakeup_tree = WuT
+    } = Entry,
+  Children
+ ) ->
+  case split_children(Event, Children) of
+    {Prefix, [Child|Suffix]} ->
+      NewTree =
+        #execution_tree{
+           event = Event,
+           children = insert_wut_into_children(WuT, Child#execution_tree.children),
+          },
+      {NewTree, Prefix ++ Suffix};
+    {Children, []} ->
+      NewTree =
+        #execution_tree{
+           event = Event,
+           children = wut_to_exec_tree(WuT)
+          },
+      %% new wakeup tree inserted
+      {NewTee, Children}
+  end.
+  
 
 assert_equal_wut([], []) -> ok;
 assert_equal_wut([Entry|Rest], WuT) ->
@@ -3104,7 +3210,7 @@ update_execution_tree_done_aux([LastTraceState], ExecutionTree) ->
      done = Done
     } = LastTraceState,
   #execution_tree{
-     active_children = ActiveChildren,
+     children = ActiveChildren,
      event = ActiveEvent,
      next_wakeup_tree = WuT
     } = ExecutionTree,
@@ -3121,7 +3227,7 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
      wakeup_tree = NextWuT
     } = NextTraceState,
   #execution_tree{
-     active_children = ActiveChildren,
+     children = ActiveChildren,
      finished_children = FinishedChildren,
      event = ActiveEvent,
      next_wakeup_tree = WuT,
@@ -3136,10 +3242,10 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
   %% with this child)
   %% {MaybeNewFinishedChild, UpdatedActiveChildren} =
   %%   update_active_child_done([NextTraceState|Rest], ActiveChildren, NextActiveEvent),
-  %% {Prefix, [NextChild|Suffix]} = split_active_children(NextActiveEvent, ActiveChildren),
+  %% {Prefix, [NextChild|Suffix]} = split_children(NextActiveEvent, ActiveChildren),
   
   %% {Prefix, [NextChild|Suffix]} =
-  %%   split_active_children(NextActiveEvent, ActiveChildren),
+  %%   split_children(NextActiveEvent, ActiveChildren),
   %% {UpdatedActiveChildren, MaybeNewFinishedChild} =
   %%   case update_execution_tree_done_aux([NextTraceState|Rest], NextChild) of
   %%     {node_finished, Event} ->
@@ -3150,7 +3256,7 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
   {OwnedWut, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
   DisputedWuT = [],
   {UpdatedActiveChildren, MaybeNewFinishedChild} =
-    case split_active_children(NextActiveEvent, ActiveChildren) of
+    case split_children(NextActiveEvent, ActiveChildren) of
       {Prefix, [NextChild|Suffix]} ->
         case update_execution_tree_done_aux([NextTraceState|Rest], NextChild) of
           {node_finished, Event} ->
@@ -3170,7 +3276,7 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
   %% I know NextWuT has been completely explored so I filter its entries from
   %% the wakeup_tree of the node
   ExecutionTree#execution_tree{
-    active_children = UpdatedActiveChildren,
+    children = UpdatedActiveChildren,
     finished_children =
       MaybeNewFinishedChild ++ FinishedChildren,
     next_wakeup_tree = NotOwnedWuT,
@@ -3181,7 +3287,7 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
 %% UTIL
 %%------------------------------------------------------------------------------
 
-split_active_children(ActiveEvent, ActiveChildren) ->      
+split_children(ActiveEvent, ActiveChildren) ->      
   Pred =
     fun(Child) ->
         not logically_equal(Child#execution_tree.event, ActiveEvent)
