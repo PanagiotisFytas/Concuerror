@@ -229,7 +229,7 @@
 -record(execution_tree, {
           active_children         = [] :: [execution_tree()],
           finished_children       = [] :: [event_transferable()],
-          maybe_finished_wut      = [] :: event_tree_transferable(),
+          finished_next_wut       = [] :: event_tree_transferable(),
           event                        :: event_transferable(),
           fragments_acessing_node = 1  :: non_neg_integer(),
           next_wakeup_tree        = [] :: event_tree_transferable()
@@ -3082,7 +3082,11 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
     {node_finished, _Ev} ->
       %% io:fwrite("Node finished:~p~n", [_Ev]),
       %% io:fwrite("============DONE=============~n",[]),
+      exit(1),
       empty;
+    {maybe_finished, _Tree} ->
+      exit(2),
+      _Tree;
     UpdatedTree ->
       %% print_tree("", UpdatedTree),
       %% io:fwrite("=============================~n",[]),
@@ -3107,13 +3111,7 @@ update_execution_tree_done_aux([LastTraceState], ExecutionTree) ->
   %% TODO : maybe remove this check
   [ActiveEvent2|_] = Done,
   true = logically_equal(ActiveEvent2, ActiveEvent),
-  case WuT =:= [] andalso ActiveChildren =:= [] of
-    true ->
-      %% this node is done, everything underneath it is explored
-      {node_finished, ActiveEvent};
-    false ->
-      ExecutionTree
-  end;
+  ExecutionTree;
 update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
   #trace_state_transferable{
      done = Done
@@ -3126,7 +3124,8 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
      active_children = ActiveChildren,
      finished_children = FinishedChildren,
      event = ActiveEvent,
-     next_wakeup_tree = WuT
+     next_wakeup_tree = WuT,
+     finished_next_wut = FinishedWuT
     } = ExecutionTree,
   %% TODO : maybe remove this check
   [ActiveEvent2|_] = Done,
@@ -3148,11 +3147,14 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
   %%     UpdatedChild ->
   %%       {Prefix ++ [UpdatedChild] ++ Suffix, []}
   %%   end,
+  {OwnedWut, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
+  DisputedWuT = [],
   {UpdatedActiveChildren, MaybeNewFinishedChild} =
     case split_active_children(NextActiveEvent, ActiveChildren) of
       {Prefix, [NextChild|Suffix]} ->
         case update_execution_tree_done_aux([NextTraceState|Rest], NextChild) of
           {node_finished, Event} ->
+            exit(impossible),
             {Prefix ++ Suffix, [Event]};
           UpdatedChild ->
             {Prefix ++ [UpdatedChild] ++ Suffix, []}
@@ -3160,26 +3162,20 @@ update_execution_tree_done_aux([TraceState, NextTraceState|Rest], ExecutionTree)
       {ActiveChildren, []} ->
         %% TODO : maybe remove these checks
         %%[] = Rest,
+        exit({not_found3, erlang:get_stacktrace()}),
         true = lists:member(NextActiveEvent#event_transferable.actor,
                             [FC#event_transferable.actor || FC <- FinishedChildren]),
         {ActiveChildren, []}
     end,
   %% I know NextWuT has been completely explored so I filter its entries from
   %% the wakeup_tree of the node
-  OwnedNextWuT = [E || E <- NextWuT, E#backtrack_entry_transferable.ownership =:= owned],
-  {NewFinishedChilren, UpdatedWuT} = get_finished_children_from_wut(OwnedNextWuT, WuT),
-  case UpdatedWuT =:= [] andalso UpdatedActiveChildren =:= [] of
-    true ->
-      %% this node is done, everything underneath it is explored
-      {node_finished, ActiveEvent};
-    false ->
-      ExecutionTree#execution_tree{
-        active_children = UpdatedActiveChildren,
-        finished_children =
-          MaybeNewFinishedChild ++ NewFinishedChilren ++ FinishedChildren,
-        next_wakeup_tree = UpdatedWuT
-       }
-  end.
+  ExecutionTree#execution_tree{
+    active_children = UpdatedActiveChildren,
+    finished_children =
+      MaybeNewFinishedChild ++ FinishedChildren,
+    next_wakeup_tree = NotOwnedWuT,
+    finished_next_wut = OwnedWut ++ FinishedWuT
+   }.
 
 %%------------------------------------------------------------------------------
 %% UTIL
