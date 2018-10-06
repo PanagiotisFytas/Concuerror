@@ -758,8 +758,8 @@ get_next_event(#scheduler_state{
             %% exit({impossible5, _Other})
         end;
       not_owned ->
-        Event = #event{label = make_ref()},
-        get_next_event(Event, State)
+        Event2 = #event{label = make_ref()},
+        get_next_event(Event2, State)
     end
   end;
 get_next_event(#scheduler_state{logger = _Logger, trace = [Last|_]} = State) ->
