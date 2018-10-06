@@ -84,7 +84,7 @@ controller_loop(#controller_status{
   %% empty = Status#controller_status.execution_tree, %% this does not hold true
   case Status#controller_status.execution_tree =/= empty of
     true ->
-      concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
+      ok;%%concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
     false ->
       ok
   end,
@@ -181,7 +181,7 @@ wait_scheduler_response(Status) ->
       %% that have been explored by it 
       NewIdle = [Scheduler|Idle],
       NewExecutionTree =
-        concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
+        ExecutionTree,%%concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
                         busy = NewBusy,
