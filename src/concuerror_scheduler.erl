@@ -598,7 +598,8 @@ log_trace(#scheduler_state{logger = Logger} = State) ->
       Errors ->
         case proplists:get_value(sleep_set_block, Errors) of
           {Origin, Sleep} ->
-            case State#scheduler_state.dpor =:= optimal of
+            case State#scheduler_state.dpor =:= optimal
+              andalso not State#scheduler_state.parallel of
               true -> ?crash({optimal_sleep_set_block, Origin, Sleep});
               false -> ok
             end,
@@ -2798,16 +2799,19 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
   %% io:fwrite("~n~n~nSpace~n~n~n"),
   %% print_all_wut_rev(lists:reverse(Trace)),
   {RevNewTrace, NewExecutionTree, BacktrackEntriesRemoved} =
-  %%  try
-      update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree),
-    %% catch _:_:_ ->
-    %%     %% print_all_wut_rev(lists:reverse(OldTrace)),
-    %%     %% io:fwrite("~n~n~n"),
-    %%     %% print_all_wut_rev(lists:reverse(Trace)),
-    %%     erlang:raise(error)
-    %% end,
+  try
+    update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree)
+  catch C:R:S ->
+      io:fwrite("~n~nBegin~n~n"),
+      print_all_wut_rev(lists:reverse(OldTrace)),
+      io:fwrite("~n~n~nSpace~n~n~n"),
+      print_all_wut_rev(lists:reverse(Trace)),
+      io:fwrite("~n~n~nEXEC~n~n~n"),
+      print_tree("", ExecutionTree),
+      erlang:exit({C,R,S})
+  end,
   %% io:fwrite("++++++++++AFTERWARDS+++++++++++++~n"),
-  %% print_all_wut_rev(RevNewTrace),
+  %% print_all_wut_rev(RNT),
   EntriesLeft2 = BacktrackSize - BacktrackEntriesRemoved,
   EntriesLeft = size_of_backtrack_transferable(lists:reverse(RevNewTrace)),
   %% catch 
@@ -2963,6 +2967,8 @@ update_execution_tree_aux(
         insert_wut_into_children(NewOwnedWuT, Children)
         %% insert disputed wut
     end,
+  %% false = have_duplicates(Children),
+  %% false = have_duplicates(WuTInsertedChildren),
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
       %% sleep_set =  NewNotOwnedEvents ++ _Sleep,
@@ -2980,7 +2986,7 @@ update_execution_tree_aux(
         catch _:_ ->
             io:fwrite("NextActiveEvent~p~n", [NextActiveEvent]),
             [print_tree("", Ch) || Ch <- Children],
-            exit(not_found1)
+            erlang:raise(not_found1)
         end,
       {[UpdatedNextTraceState|UpdatedRest], UpdatedChildren, MaybeNewFinishedChild, EntriesRemoved} =
         case update_execution_tree_aux(
@@ -2994,6 +3000,7 @@ update_execution_tree_aux(
           {UpdatedTrace, UpdatedChild, N} ->
             {UpdatedTrace, Prefix ++ [UpdatedChild] ++ Suffix, [], N}
         end,
+      %%false = have_duplicates(UpdatedChildren),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
           children = UpdatedChildren
@@ -3017,6 +3024,7 @@ update_execution_tree_aux(
               insert_completely_new_trace([UpdatedNextTraceState|Rest]),
             {[UpNextTS|UpRest], [NewChild|WuTInsertedChildren], 0}
         end,
+      %%false = have_duplicates(TraceInsertedChildren),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
           children = TraceInsertedChildren
@@ -3026,26 +3034,27 @@ update_execution_tree_aux(
        EntriesRemoved + length(NewNotOwnedWuT)}
   end.
 
-insert_new_trace([TraceState], Nodes) ->
-  exit(impossible6),
+insert_new_trace([TraceState], Child) ->
+  %%exit(impossible6),
   #trace_state_transferable{
      done = Done
     } = TraceState,
+  #execution_tree{
+     event = Event2
+    } = Child,
   [Event|_] = Done,
-  case split_children(Event, Nodes) of
-    {Prefix, [Child|Suffix]} ->
-      Nodes;
-    {Nodes, []} ->
-      [#execution_tree{event = Event}|Nodes] 
-  end;
+  true = logically_equal(Event, Event2),
+  {[TraceState], Child, 0};
 insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
   #trace_state_transferable{
      done = Done
     } = TraceState,
   #trace_state_transferable{
+     done = NextDone,
      wakeup_tree = NextWuT
     } = NextTraceState,
   [Event|_] = Done,
+  [NextEvent|_] = NextDone,
   #execution_tree{
      event = Event2,
      children = Children
@@ -3056,6 +3065,7 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
   {NewOwnedWuT, NewNotOwnedWuT} =
     get_ownership(DisputedWuT, Children, [], []),
   WuTInsertedChildren = insert_wut_into_children(NewOwnedWuT, Children),
+  %% false = have_duplicates(WuTInsertedChildren),
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
       %%sleep_set =  NewNotOwnedEvents ++ _Sleep,
@@ -3063,20 +3073,32 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
       wakeup_tree = OwnedWuT ++ NewOwnedWuT ++ NotOwnedWuT ++ NewNotOwnedWuT
      },
   {[UpdatedNextTraceState|UpdatedRest], TraceInsertedChildren, EntriesRemoved} =
-    case split_children(Event, WuTInsertedChildren) of
+    case split_children(NextEvent, WuTInsertedChildren) of
       {Prefix, [Child|Suffix]} ->
         %% TraceState is on the same level as child
+        %%io:fwrite("1~n"),
         {[UpNextTS|UpRest],
          UpdatedChild,
          ER} = 
           insert_new_trace([UpdatedNextTraceState|Rest], Child), 
         {[UpNextTS|UpRest], Prefix ++ [UpdatedChild] ++ Suffix, ER};
       {WuTInsertedChildren, []} ->
+        %%io:fwrite("2~n"),
         {[UpNextTS|UpRest],
          NewChild} =
           insert_completely_new_trace([UpdatedNextTraceState|Rest]),
         {[UpNextTS|UpRest], [NewChild|WuTInsertedChildren], 0}
     end,
+  %% case have_duplicates(TraceInsertedChildren) of
+  %%   true ->
+  %%     io:fwrite("Event:~p~n", [Event]),
+  %%     io:fwrite("+++++++++++++++++++++++~n"),
+  %%     [print_tree("", Ch) || Ch <- TraceInsertedChildren];
+  %%   _ ->
+  %%     ok
+  %% end,
+  %% false = have_duplicates(WuTInsertedChildren),
+  %% false = have_duplicates(TraceInsertedChildren),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
       children = TraceInsertedChildren
@@ -3122,6 +3144,7 @@ insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
        children =
          [NewChild|wut_to_exec_tree(NextWuT)]
       },
+  %%false = have_duplicates([NewChild|wut_to_exec_tree(NextWuT)]),
   {[TraceState, UpdatedNextTraceState|UpdatedRest], NewExecutionTree}.
 
 get_finished_wut(OldWuT, WuT, ActiveEvent) ->
@@ -3133,6 +3156,19 @@ get_finished_wut(OldWuT, WuT, ActiveEvent) ->
         Actor =/= ActiveActor
     end,
   lists:filter(Pred, OldWuT -- WuT).  
+
+have_duplicates([]) ->
+  false;
+have_duplicates([Child|Rest]) ->
+  #execution_tree{
+     event = Event
+    } = Child,
+  case split_children(Event, Rest) of
+    {Prefix, [Ch|Suffix]} ->
+      true;
+    _ ->
+      have_duplicates(Rest)
+  end.
 
 split_wut([]) ->
   {[], [], []};
