@@ -50,7 +50,9 @@
 -export([distribute_interleavings/2]).
 -export([ initialize_execution_tree/1,
           update_execution_tree_done/2,
-          update_execution_tree/3
+          update_execution_tree/3,
+          insert_new_trace/2,
+          update_trace_from_exec_tree/2
         ]).
 -export([print_tree/2]).
 
@@ -382,42 +384,26 @@ explore_scheduling_parallel(State) ->
      interleavings_explored = IE
     } = State,
   LogState = log_trace(UpdatedState),
-  RacesDetectedState = plan_more_interleavings(LogState),
-  {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
-  %% case (IID =:= 3) andalso ((IID =:= 3) andalso (State#scheduler_state.scheduler_number =:= 3)) of
-  %%   true ->
-  %%     io:fwrite("IID ~w SN ~w ~n", [IID, State#scheduler_state.scheduler_number =:= 1]),
-  %%     print_all(NewState);
-  %%     %%exit(test);
-  %%   false ->
-  %%     ok
-  %% end,
-  %% print_all_wut(NewState),
-  %% io:fwrite("~p~n", [NewState]),
-  Controller = NewState#scheduler_state.controller,
+  Controller = State#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
+  Controller !
+    {exploration_finished, self(), make_state_transferable(LogState)},
+  WuTUpdatedState = 
+    receive {updated_trace, TransferableState} ->
+      revert_state(State, TransferableState)
+    end,
+  RacesDetectedState = plan_more_interleavings(WuTUpdatedState),
+  {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
   case HasMore of
     true ->
       %% TODO add termination when testing something that I do not own
       %% concuerror_callback:reset_processes(State#scheduler_state.processes),
-      %% LoadBalancedState = unload_work(NewState),
-      case own_next_interleaving(NewState) of
-        true ->
-          #scheduler_state{
-             budget = Budget
-            } = State,
-          case Duration > Budget of
-            false ->
-              explore_scheduling_parallel(NewState#scheduler_state{
-                                            interleavings_explored = IE + 1,
-                                            replay_mode = pseudo
-                                           });
-            true ->
-              Controller ! {budget_exceeded, self(), make_state_transferable(NewState), Duration, IE+1}
-          end;
-        false ->
-          Controller ! {claim_ownership, self(), make_state_transferable(NewState), Duration, IE+1}
-      end;
+      true = own_next_interleaving(NewState),
+      Controller ! {has_more, self(), make_state_transferable(NewState), Duration, IE+1};
+      %% explore_scheduling_parallel(NewState#scheduler_state{
+      %%                               interleavings_explored = IE + 1,
+      %%                               replay_mode = pseudo
+      %%                              });
     false ->
       case NewState#scheduler_state.scheduler_number of
         2 ->
@@ -455,22 +441,20 @@ own_next_interleaving(#scheduler_state{trace = [TraceState|_]} = _State) ->
 
 loop(State) ->
   receive
-    {start, Budget} ->
+    start ->
       FixedState =
         State#scheduler_state{
           interleavings_explored = 0,
-          budget = Budget,
           start_time = erlang:monotonic_time(?time_unit)
          },
       NewState = explore_scheduling_parallel(FixedState),
       loop(NewState);
-    {explore, TransferableState, Budget} ->
+    {explore, TransferableState} ->
       StartTime = erlang:monotonic_time(?time_unit),
       ReceivedState = revert_state(State, TransferableState),
       FixedState =
         ReceivedState#scheduler_state{
           interleavings_explored = 0,
-          budget = Budget,
           replay_mode = actual,
           start_time = StartTime
          },
@@ -1591,13 +1575,7 @@ update_trace(
                     false ->
                       {insert_wakeup_optimal(SleepSet, Wakeup, NotDep, Bound, Origin), false};
                     true ->
-                      Ownership =
-                        case TraceState#trace_state.ownership of
-                          false ->
-                            trace_not_owned;
-                          true ->
-                            trace_owned
-                          end,
+                      Ownership = owned,
                       {insert_wakeup_optimal_parallel(SleepSet, Wakeup, NotDep, Bound, Origin, Ownership), false}
                     end;
                 true ->
@@ -1959,13 +1937,7 @@ backtrackify(Seq, Cause, Ownership) ->
         EntryOwnership =
           case Acc =:= [] of
             true ->
-              %% this is a leaf entry
-              case Ownership of
-                trace_owned ->
-                  owned;
-                trace_not_owned ->
-                  disputed
-              end;
+              Ownership;
             false ->
               not_owned
           end,
@@ -3016,7 +2988,7 @@ update_execution_tree_aux(
             {[UpNextTS|UpRest],
              UpdatedChild,
              ER} = 
-              insert_new_trace([UpdatedNextTraceState|Rest], Child), 
+              insert_new_trace_aux([UpdatedNextTraceState|Rest], Child), 
             {[UpNextTS|UpRest], Prefix ++ [UpdatedChild] ++ Suffix, ER};
           {WuTInsertedChildren, []} ->
             {[UpNextTS|UpRest],
@@ -3034,18 +3006,40 @@ update_execution_tree_aux(
        EntriesRemoved + length(NewNotOwnedWuT)}
   end.
 
-insert_new_trace([TraceState], Child) ->
+%%------------------------------------------------------------------------------
+
+-spec insert_new_trace(reduced_scheduler_state(), execution_tree()) ->
+                          execution_tree().
+
+insert_new_trace(Fragment, ExecutionTree) ->
+  #reduced_scheduler_state{
+     trace = Trace
+    } = Fragment,
+  NewExecutionTree =
+    try
+      insert_new_trace_aux(lists:reverse(Trace), ExecutionTree)
+    catch C:R:S ->
+        print_all_wut_rev(lists:reverse(Trace)),
+        io:fwrite("~n~n~nEXEC~n~n~n"),
+        print_tree("", ExecutionTree),
+        erlang:exit({C,R,S})
+    end,
+  %% io:fwrite("++++++++++AFTERWARDS+++++++++++++~n"),
+  %% print_all_wut_rev(RNT),
+  NewExecutionTree.
+
+insert_new_trace_aux([TraceState], ExecutionTree) ->
   %%exit(impossible6),
   #trace_state_transferable{
      done = Done
     } = TraceState,
   #execution_tree{
      event = Event2
-    } = Child,
+    } = ExecutionTree,
   [Event|_] = Done,
   true = logically_equal(Event, Event2),
-  {[TraceState], Child, 0};
-insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
+  ExecutionTree;
+insert_new_trace_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
   #trace_state_transferable{
      done = Done
     } = TraceState,
@@ -3060,34 +3054,20 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
      children = Children
     } = ExecutionTree,
   true = logically_equal(Event, Event2),
-  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
-  %% when a disputed wut becomes owned new children must be added
-  {NewOwnedWuT, NewNotOwnedWuT} =
-    get_ownership(DisputedWuT, Children, [], []),
-  WuTInsertedChildren = insert_wut_into_children(NewOwnedWuT, Children),
+  {OwnedWuT, NotOwnedWuT, []} = split_wut(NextWuT),
+  WuTInsertedChildren = insert_wut_into_children(OwnedWuT, Children),
   %% false = have_duplicates(WuTInsertedChildren),
-  UpdatedNextTraceState =
-    NextTraceState#trace_state_transferable{
-      %%sleep_set =  NewNotOwnedEvents ++ _Sleep,
-      %% done = NextDone ++ NewNotOwnedEvents,
-      wakeup_tree = OwnedWuT ++ NewOwnedWuT ++ NotOwnedWuT ++ NewNotOwnedWuT
-     },
-  {[UpdatedNextTraceState|UpdatedRest], TraceInsertedChildren, EntriesRemoved} =
+  TraceInsertedChildren =
     case split_children(NextEvent, WuTInsertedChildren) of
       {Prefix, [Child|Suffix]} ->
         %% TraceState is on the same level as child
         %%io:fwrite("1~n"),
-        {[UpNextTS|UpRest],
-         UpdatedChild,
-         ER} = 
-          insert_new_trace([UpdatedNextTraceState|Rest], Child), 
-        {[UpNextTS|UpRest], Prefix ++ [UpdatedChild] ++ Suffix, ER};
+        UpdatedChild = insert_new_trace_aux([NextTraceState|Rest], Child), 
+        Prefix ++ [UpdatedChild] ++ Suffix;
       {WuTInsertedChildren, []} ->
         %%io:fwrite("2~n"),
-        {[UpNextTS|UpRest],
-         NewChild} =
-          insert_completely_new_trace([UpdatedNextTraceState|Rest]),
-        {[UpNextTS|UpRest], [NewChild|WuTInsertedChildren], 0}
+        NewChild = insert_completely_new_trace([NextTraceState|Rest]),
+        [NewChild|WuTInsertedChildren]
     end,
   %% case have_duplicates(TraceInsertedChildren) of
   %%   true ->
@@ -3097,15 +3077,13 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
   %%   _ ->
   %%     ok
   %% end,
-  %% false = have_duplicates(WuTInsertedChildren),
-  %% false = have_duplicates(TraceInsertedChildren),
+  false = have_duplicates(WuTInsertedChildren),
+  false = have_duplicates(TraceInsertedChildren),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
       children = TraceInsertedChildren
      },
-  {[TraceState, UpdatedNextTraceState|UpdatedRest],
-   UpdatedExecutionTree,
-   EntriesRemoved + length(NewNotOwnedWuT)}.
+   UpdatedExecutionTree.
 
 insert_completely_new_trace([TraceState]) ->
   #trace_state_transferable{
@@ -3116,7 +3094,7 @@ insert_completely_new_trace([TraceState]) ->
     #execution_tree{
        event = Event
       },
-  {[TraceState], NewExecutionTree};
+  NewExecutionTree;
 insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
   #trace_state_transferable{
      done = Done
@@ -3125,19 +3103,11 @@ insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
      wakeup_tree = NextWuT
     } = NextTraceState,
   [Event|_] = Done,
-  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
+  %% This could not be the case,
+  %% there could be some not_owned wut left from the parent I think
+  {OwnedWuT, [], []} = split_wut(NextWuT),
   %% when a disputed wut becomes owned new children must be added
-  {NewOwnedWuT, NewNotOwnedWuT} =
-    get_ownership(DisputedWuT, [], [], []),
-  NewNotOwnedWuT = [],
-  UpdatedNextTraceState =
-    NextTraceState#trace_state_transferable{
-      %%sleep_set =  NewNotOwnedEvents ++ _Sleep,
-      %% done = NextDone ++ NewNotOwnedEvents,
-      wakeup_tree = OwnedWuT ++ NewOwnedWuT ++ NotOwnedWuT %%++ NewNotOwnedWuT
-     },
-  {[UpdatedNextTraceState|UpdatedRest], NewChild} =
-    insert_completely_new_trace([UpdatedNextTraceState|Rest]),
+  NewChild = insert_completely_new_trace([NextTraceState|Rest]),
   NewExecutionTree =
     #execution_tree{
        event = Event,
@@ -3145,7 +3115,7 @@ insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
          [NewChild|wut_to_exec_tree(NextWuT)]
       },
   %%false = have_duplicates([NewChild|wut_to_exec_tree(NextWuT)]),
-  {[TraceState, UpdatedNextTraceState|UpdatedRest], NewExecutionTree}.
+  NewExecutionTree.
 
 get_finished_wut(OldWuT, WuT, ActiveEvent) ->
   ActiveActor = ActiveEvent#event_transferable.actor,
@@ -3312,7 +3282,7 @@ insert_wut_into_children_aux(
       %% new wakeup tree inserted
       {NewTree, Children}
   end.
-  
+
 
 assert_equal_wut([], []) -> ok;
 assert_equal_wut([Entry|Rest], WuT) ->
@@ -3322,6 +3292,152 @@ assert_equal_wut([Entry|Rest], WuT) ->
                             BacktrackEntry#backtrack_entry_transferable.event)
     end,
   assert_equal_wut(Rest, lists:filter(Pred, WuT)).
+
+%%------------------------------------------------------------------------------
+
+-spec update_trace_from_exec_tree(reduced_scheduler_state(), execution_tree()) ->
+                                     reduced_scheduler_state().
+
+update_trace_from_exec_tree(Fragment, ExecutionTree) ->
+  #reduced_scheduler_state{
+     trace = Trace
+    } = Fragment,
+  RevNewTrace =
+    try
+      update_trace_from_exec_tree_aux(lists:reverse(Trace), ExecutionTree)
+    catch C:R:S ->
+        print_all_wut_rev(lists:reverse(Trace)),
+        io:fwrite("~n~n~nEXEC~n~n~n"),
+        print_tree("", ExecutionTree),
+        erlang:exit({C,R,S})
+    end,
+  %% io:fwrite("++++++++++AFTERWARDS+++++++++++++~n"),
+  %% print_all_wut_rev(RNT),
+  Fragment#reduced_scheduler_state{
+    trace = lists:reverse(RevNewTrace)
+   }.
+
+update_trace_from_exec_tree_aux([TraceState], ExecutionTree) ->
+  #trace_state_transferable{
+     done = Done,
+     sleep_set = _Sleep
+    } = TraceState,
+  #execution_tree{
+     children = Children,
+     %% finished_children = FinishedChildren,
+     event = ActiveEvent
+    } = ExecutionTree,
+  %% TODO : maybe remove this check
+  [ActiveEvent2|_] = Done,
+  true = logically_equal(ActiveEvent2, ActiveEvent),
+  [TraceState];
+update_trace_from_exec_tree_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
+  #trace_state_transferable{
+     done = Done,
+     sleep_set = _Sleep
+    } = TraceState,
+  #trace_state_transferable{
+     done = NextDone,
+     sleep_set = NextSleep,
+     wakeup_tree = NextWuT
+    } = NextTraceState,
+  #execution_tree{
+     children = Children,
+     %% finished_children = FinishedChildren,
+     event = ActiveEvent
+    } = ExecutionTree,
+  %% TODO : maybe remove this check
+  [ActiveEvent2|_] = Done,
+  true = logically_equal(ActiveEvent2, ActiveEvent),
+  [NextActiveEvent|_NextFinishedEvents] = NextDone,
+  AllSleep = [NextActiveEvent|NextSleep],
+  UpdatedWuT = get_full_wut(NextWuT, AllSleep, Children),
+  {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
+  UpdatedNextTraceState =
+    NextTraceState#trace_state_transferable{
+      %% sleep_set =  NewNotOwnedEvents ++ _Sleep,
+      %% done = NextDone ++ NewNotOwnedEvents,
+      wakeup_tree = UpdatedWuT
+     },
+  [UpdatedNextTraceState|UpdatedRest] =
+    case split_children(NextActiveEvent, Children) of
+      {Prefix, [Child|Suffix]} ->
+        update_trace_from_exec_tree_aux([UpdatedNextTraceState|Rest], Child);
+      {Children, []} ->
+        %% Rest must contain no wakeup tree
+        [UpdatedNextTraceState|Rest]
+    end,
+  [TraceState, UpdatedNextTraceState|UpdatedRest].
+
+get_full_wut(CurrentWuT, AllSleep, Children) ->
+  {OwnedWuT, NotOwnedWuT, []} = split_wut(CurrentWuT),
+  ExecTreeWuT = execution_tree_to_wut(filter_children(Children, AllSleep)),
+  reclaim_ownership(OwnedWuT, ExecTreeWuT).
+
+reclaim_ownership([], ExecTreeWuT) ->
+  ExecTreeWuT;
+reclaim_ownership(Wut, []) ->
+  %% WuT should be a subtree of ExecTreeWuT
+  exit(impossible7);
+reclaim_ownership([Entry|Rest], ExecTreeWuT) ->
+  {UpdatedExecTreeEntry, ExecTreeWuTLeft} = reclaim_ownership_aux(Entry, ExecTreeWuT),
+  [UpdatedExecTreeEntry|reclaim_ownership(Rest, ExecTreeWuTLeft)].
+
+reclaim_ownership_aux(
+  #backtrack_entry_transferable{
+     event = Event,
+     wakeup_tree = WuT,
+     ownership = Ownership
+    } = Entry,
+  ExecTreeWuT
+ ) ->
+  case split_wut_with(Event, ExecTreeWuT) of
+    {Prefix, [EqualEntry|Suffix]} ->
+      NewEntry =
+        EqualEntry#backtrack_entry_transferable{
+          event = Event,
+          ownership = Ownership,
+          wakeup_tree =
+            reclaim_ownership(WuT, EqualEntry#backtrack_entry_transferable.wakeup_tree)
+         },
+      {NewEntry, Prefix ++ Suffix};
+    {ExecTreeWuT, []} ->
+      exit(impossible7)
+  end.
+
+split_wut_with(Event, WuT) ->      
+  Pred =
+    fun(Entry) ->
+        not logically_equal(Entry#backtrack_entry_transferable.event, Event)
+    end,
+  lists:splitwith(Pred, WuT).
+
+
+filter_children(Children, AllSleep) ->
+  AllSleepActors = [Ev#event_transferable.actor || Ev <- AllSleep],
+  Pred =
+    fun(Child) ->
+        Event = Child#execution_tree.event,
+        %% TODO check if I need to use logically_equal instead
+        Actor = Event#event_transferable.actor,
+        not lists:member(Actor, AllSleepActors)
+    end,
+  lists:filter(Pred, Children).
+
+execution_tree_to_wut([]) ->
+  [];
+execution_tree_to_wut([Node|Rest]) ->
+  #execution_tree{
+     event = Event,
+     children = Children
+    } = Node,
+  Entry =
+    #backtrack_entry_transferable{
+       event = Event,
+       wakeup_tree = execution_tree_to_wut(Children)
+      },
+  [Entry|execution_tree_to_wut(Rest)].
+
 
 %%------------------------------------------------------------------------------
 
