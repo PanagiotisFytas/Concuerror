@@ -576,7 +576,7 @@ log_trace(#scheduler_state{logger = Logger} = State) ->
       Errors ->
         case proplists:get_value(sleep_set_block, Errors) of
           {Origin, Sleep} ->
-            case State#scheduler_state.dpor =:= optimal of
+            case State#scheduler_state.dpor =:= optimal
               andalso not State#scheduler_state.parallel of
               true -> ?crash({optimal_sleep_set_block, Origin, Sleep});
               false -> ok
