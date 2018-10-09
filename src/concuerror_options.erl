@@ -157,6 +157,9 @@ options() ->
   ,{parallel, [experimental], $p, {boolean, false},
     "Parallel exploration of interleavings",
     nolong}
+  ,{number_of_schedulers, [experimental], undefined, {integer, 3},
+    "Number of workers used in parallel mode",
+    nolong}
   ,{optimal, [por], undefined, boolean,
     "Synonym for `--dpor optimal (true) | source (false)`.",
     nolong}
@@ -320,7 +323,8 @@ check_validity(Key) ->
         Key =:= after_timeout;
         Key =:= depth_bound;
         Key =:= print_depth;
-        Key =:= max_processes
+        Key =:= max_processes;
+        Key =:= number_of_schedulers
         ->
       {fun(V) -> V > 0 end, "a positive integer"};
     dpor ->
