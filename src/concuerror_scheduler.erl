@@ -3053,8 +3053,8 @@ insert_new_trace_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
   %%   _ ->
   %%     ok
   %% end,
-  false = have_duplicates(WuTInsertedChildren),
-  false = have_duplicates(TraceInsertedChildren),
+  %% false = have_duplicates(WuTInsertedChildren),
+  %% false = have_duplicates(TraceInsertedChildren),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
       children = TraceInsertedChildren
@@ -3114,6 +3114,19 @@ have_duplicates([Child|Rest]) ->
       true;
     _ ->
       have_duplicates(Rest)
+  end.
+
+have_duplicates_wut([]) ->
+  false;
+have_duplicates_wut([Entry|Rest]) ->
+  #backtrack_entry_transferable{
+     event = Event
+    } = Entry,
+  case split_wut_with(Event, Rest) of
+    {_, [_|_]} ->
+      true;
+    _ ->
+      have_duplicates_wut(Rest)
   end.
 
 split_wut([]) ->
@@ -3326,8 +3339,24 @@ update_trace_from_exec_tree_aux([TraceState, NextTraceState|Rest], ExecutionTree
   [ActiveEvent2|_] = Done,
   true = logically_equal(ActiveEvent2, ActiveEvent),
   [NextActiveEvent|_NextFinishedEvents] = NextDone,
-  AllSleep = [NextActiveEvent|NextSleep],
-  UpdatedWuT = get_full_wut(NextWuT, AllSleep, Children),
+  AllSleep = NextDone,
+  %% false = have_duplicates_wut(NextWuT),
+  UpdatedWuT = 
+    try get_full_wut(NextWuT, AllSleep, Children)
+    catch
+      E:R:S ->
+        io:fwrite("Children: ~p~n NextWuT: ~p~n AllSleep:~p~n",
+                  [
+                   [(Ch#execution_tree.event) 
+                    || Ch <- Children],
+                   [(Ch#backtrack_entry_transferable.event)
+                    || Ch <- NextWuT],
+                   [(Ch)
+                    || Ch <- AllSleep]
+                  ]),
+        exit({E,R,S})
+    end,
+  %% false = have_duplicates_wut(UpdatedWuT),
   {OwnedWuT, NotOwnedWuT, DisputedWuT} = split_wut(NextWuT),
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
@@ -3352,9 +3381,10 @@ get_full_wut(CurrentWuT, AllSleep, Children) ->
 
 reclaim_ownership([], ExecTreeWuT) ->
   ExecTreeWuT;
-reclaim_ownership(Wut, []) ->
+reclaim_ownership(WuT, []) ->
   %% WuT should be a subtree of ExecTreeWuT
-  exit(impossible7);
+  %% exit(impossible7);
+  WuT;
 reclaim_ownership([Entry|Rest], ExecTreeWuT) ->
   {UpdatedExecTreeEntry, ExecTreeWuTLeft} = reclaim_ownership_aux(Entry, ExecTreeWuT),
   [UpdatedExecTreeEntry|reclaim_ownership(Rest, ExecTreeWuTLeft)].
