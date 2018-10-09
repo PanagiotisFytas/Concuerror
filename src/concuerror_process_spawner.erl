@@ -139,7 +139,7 @@ discard_pids(CurrentPid, TargetPid) ->
   discard_pids(NextPid, TargetPid).
 
 %%-----------------------------------------------------------------------------
-  
+
 spawner_loop(State) ->
   #spawner_state{available_processes = ProcessQueue} = State,
   receive
@@ -178,7 +178,7 @@ master_loop(State) ->
           % key does not exist
           [Spawner ! {self(), get_new_process, Symbol} || Spawner <- SlaveSpawners],
           % try and allocate processes to nodes and symbols
-          try receive_new_processes(ProcessMap, Symbol, length(SlaveSpawners)) of UpdatedProcessMap -> 
+          try receive_new_processes(ProcessMap, Symbol, length(SlaveSpawners)) of UpdatedProcessMap ->
               {Process, NewProcessMap} = maps:take(Key, UpdatedProcessMap),
               unlink(Process),
               Caller ! {new_process, Process, self()},

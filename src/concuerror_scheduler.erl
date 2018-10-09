@@ -56,6 +56,8 @@
         ]).
 -export([print_tree/2]).
 
+-export([make_term_transferable/1]).
+
 -export_type([reduced_scheduler_state/0,
               execution_tree/0
              ]).
@@ -99,7 +101,6 @@
           done             = []         :: [event()],
           enabled          = []         :: [pid() | channel_actor()],
           index                         :: index(),
-          ownership = true              :: boolean(),
           unique_id                     :: unique_id(),
           previous_actor   = 'none'     :: 'none' | actor(),
           scheduling_bound              :: concuerror_options:bound(),
@@ -203,7 +204,6 @@
           done             = []         :: [event_transferable()],
           enabled          = []         :: [string() | channel_actor_transferable()],
           index                         :: index(),
-          ownership = false             :: boolean(),
           unique_id                     :: unique_id(),
           previous_actor   = 'none'     :: 'none' | actor_transferable(),
           scheduling_bound              :: concuerror_options:bound(),
@@ -418,25 +418,19 @@ explore_scheduling_parallel(State) ->
 
 own_next_interleaving(#scheduler_state{trace = [TraceState|_]} = _State) ->
   #trace_state{
-     ownership = Ownership,
      wakeup_tree = WuT
     } = TraceState,
-  case Ownership of
-    true ->
+  [BacktrackEntry|_] = WuT,
+  case determine_ownership(BacktrackEntry) of
+    owned ->
       true;
-    false ->
-      [BacktrackEntry|_] = WuT,
-      case determine_ownership(BacktrackEntry) of
-        owned ->
-          true;
-        disputed ->
-          false;
-        not_owned ->
-          %% TODO :
-          %% this should be made impossible by filtering (or sorting) not_owned entries
-          %% in the find_prefix function
-          exit(impossible4)
-      end
+    disputed ->
+      false;
+    not_owned ->
+      %% TODO :
+      %% this should be made impossible by filtering (or sorting) not_owned entries
+      %% in the find_prefix function
+      exit(impossible4)
   end.        
 
 loop(State) ->
@@ -582,8 +576,8 @@ log_trace(#scheduler_state{logger = Logger} = State) ->
       Errors ->
         case proplists:get_value(sleep_set_block, Errors) of
           {Origin, Sleep} ->
-            case State#scheduler_state.dpor =:= optimal
-              andalso not State#scheduler_state.parallel of
+            case State#scheduler_state.dpor =:= optimal of
+              %% andalso not State#scheduler_state.parallel of
               true -> ?crash({optimal_sleep_set_block, Origin, Sleep});
               false -> ok
             end,
@@ -730,18 +724,19 @@ get_next_event(#scheduler_state{
            [N, _I]),
         get_next_event(Event, State#scheduler_state{origin = N});
       disputed ->
-        case Last#trace_state.ownership of
-          true ->
-            ?debug(
-               _Logger,
-               "New interleaving detected in ~p (diverge @ ~p)~n",
-               [N, _I]),
-            get_next_event(Event, State#scheduler_state{origin = N});
-          false ->
-            Ev = #event{label = make_ref()},
-            get_next_event(Ev, State)
-            %% exit({impossible5, _Other})
-        end;
+        exit(impossible8);
+        %% case Last#trace_state.ownership of
+        %%   true ->
+        %%     ?debug(
+        %%        _Logger,
+        %%        "New interleaving detected in ~p (diverge @ ~p)~n",
+        %%        [N, _I]),
+        %%     get_next_event(Event, State#scheduler_state{origin = N});
+        %%   false ->
+        %%     Ev = #event{label = make_ref()},
+        %%     get_next_event(Ev, State)
+        %%     %% exit({impossible5, _Other})
+        %% end;
       not_owned ->
         Event2 = #event{label = make_ref()},
         get_next_event(Event2, State)
@@ -1045,23 +1040,6 @@ update_state(#event{actor = Actor} = Event, State) ->
   ?trace(Logger, "  Next bound: ~p~n", [NewSchedulingBound]),
   NewLastDone = [Event|Done],
   NextIndex = Index + 1,
-  NextTraceOwnership =
-    case Parallel andalso DPOR =:= optimal of
-      true ->
-        case Last#trace_state.ownership of
-          true ->
-            true;
-          false ->
-            case NextWakeupTree of
-              [] ->
-                true;
-              _ ->
-                false
-            end
-        end;
-      false ->
-        true
-    end,
   InitNextTrace =
     #trace_state{
        actors      = Actors,
@@ -1070,8 +1048,7 @@ update_state(#event{actor = Actor} = Event, State) ->
        scheduling_bound = NewSchedulingBound,
        sleep_set   = NextSleepSet,
        unique_id   = {InterleavingId, NextIndex},
-       wakeup_tree = NextWakeupTree,
-       ownership = NextTraceOwnership
+       wakeup_tree = NextWakeupTree
       },
   NewLastTrace =
     Last#trace_state{
@@ -2101,7 +2078,6 @@ find_prefix(Trace, SchedulingBoundType) ->
 find_prefix_parallel_optimal([]) -> [];
 find_prefix_parallel_optimal([TraceState|Rest]) ->
   #trace_state{
-     ownership = TraceStateOwnership,
      wakeup_tree = Tree
     } = TraceState,
   case Tree =:= [] of
@@ -2774,12 +2750,12 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
   try
     update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree)
   catch C:R:S ->
-      io:fwrite("~n~nBegin~n~n"),
-      print_all_wut_rev(lists:reverse(OldTrace)),
-      io:fwrite("~n~n~nSpace~n~n~n"),
-      print_all_wut_rev(lists:reverse(Trace)),
-      io:fwrite("~n~n~nEXEC~n~n~n"),
-      print_tree("", ExecutionTree),
+      %% io:fwrite("~n~nBegin~n~n"),
+      %% print_all_wut_rev(lists:reverse(OldTrace)),
+      %% io:fwrite("~n~n~nSpace~n~n~n"),
+      %% print_all_wut_rev(lists:reverse(Trace)),
+      %% io:fwrite("~n~n~nEXEC~n~n~n"),
+      %% print_tree("", ExecutionTree),
       erlang:exit({C,R,S})
   end,
   %% io:fwrite("++++++++++AFTERWARDS+++++++++++++~n"),
@@ -2931,14 +2907,14 @@ update_execution_tree_aux(
   {NewOwnedWuT, NewNotOwnedWuT} =
     get_ownership(DisputedWuT, Children, [], []),
   WuTInsertedChildren =
-    case NextTraceState#trace_state_transferable.ownership of
-      true ->
-        insert_wut_into_children(OwnedWuT, Children);
-      %% maybe insert OwnedWut into children
-      false ->
-        insert_wut_into_children(NewOwnedWuT, Children)
-        %% insert disputed wut
-    end,
+    %% case NextTraceState#trace_state_transferable.ownership of
+    %%   true ->
+    insert_wut_into_children(OwnedWuT, Children),
+    %%   %% maybe insert OwnedWut into children
+    %%   false ->
+    %%     insert_wut_into_children(NewOwnedWuT, Children)
+    %%     %% insert disputed wut
+    %% end,
   %% false = have_duplicates(Children),
   %% false = have_duplicates(WuTInsertedChildren),
   UpdatedNextTraceState =
@@ -3019,9 +2995,9 @@ insert_new_trace(Fragment, ExecutionTree) ->
     try
       insert_new_trace_aux(lists:reverse(Trace), ExecutionTree)
     catch C:R:S ->
-        print_all_wut_rev(lists:reverse(Trace)),
-        io:fwrite("~n~n~nEXEC~n~n~n"),
-        print_tree("", ExecutionTree),
+        %% print_all_wut_rev(lists:reverse(Trace)),
+        %% io:fwrite("~n~n~nEXEC~n~n~n"),
+        %% print_tree("", ExecutionTree),
         erlang:exit({C,R,S})
     end,
   %% io:fwrite("++++++++++AFTERWARDS+++++++++++++~n"),
@@ -3306,9 +3282,9 @@ update_trace_from_exec_tree(Fragment, ExecutionTree) ->
     try
       update_trace_from_exec_tree_aux(lists:reverse(Trace), ExecutionTree)
     catch C:R:S ->
-        print_all_wut_rev(lists:reverse(Trace)),
-        io:fwrite("~n~n~nEXEC~n~n~n"),
-        print_tree("", ExecutionTree),
+        %% print_all_wut_rev(lists:reverse(Trace)),
+        %% io:fwrite("~n~n~nEXEC~n~n~n"),
+        %% print_tree("", ExecutionTree),
         erlang:exit({C,R,S})
     end,
   %% io:fwrite("++++++++++AFTERWARDS+++++++++++++~n"),
@@ -3402,6 +3378,8 @@ reclaim_ownership_aux(
          },
       {NewEntry, Prefix ++ Suffix};
     {ExecTreeWuT, []} ->
+      io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
+                [Event, ExecTreeWuT]),
       exit(impossible7)
   end.
 
@@ -3947,7 +3925,7 @@ make_state_transferable(State) ->
      origin = Origin,
      trace = Trace
     } = State,
-  ets:new(ets_transferable, [named_table, public]),
+  %% ets:new(ets_transferable, [named_table, public]),
   TransferableTrace =
     [make_trace_state_transferable(TraceState) || TraceState <- Trace],
   TransferableState =
@@ -3958,11 +3936,11 @@ make_state_transferable(State) ->
        last_scheduled = pid_to_list(LastScheduled),
        need_to_replay = NeedToReplay,
        origin = Origin,
-       processes_ets_tables = ets:tab2list(ets_transferable),
+       %% processes_ets_tables = ets:tab2list(ets_transferable),
        safe = true,
        trace = TransferableTrace
       },
-  ets:delete(ets_transferable),
+  %% ets:delete(ets_transferable),
   TransferableState.
 
 make_trace_state_transferable(TraceState) ->
@@ -3972,7 +3950,6 @@ make_trace_state_transferable(TraceState) ->
      done = Done,
      enabled = Enabled,
      index = Index,
-     ownership = Ownership,
      unique_id = UniqueId,
      previous_actor = PreviousActor,
      scheduling_bound = SchedulingBound,
@@ -3988,12 +3965,11 @@ make_trace_state_transferable(TraceState) ->
      done = [make_event_tranferable(Event) || Event <- Done],
      enabled = [make_actor_transferable(Actor) || Actor <- Enabled],
      index = Index,
-     ownership = Ownership,
      unique_id = UniqueId,
      previous_actor = make_actor_transferable(PreviousActor),
      scheduling_bound = SchedulingBound,
      sleep_set = [make_event_tranferable(Event) || Event <- SleepSet],
-     wakeup_tree = make_wakeup_tree_transferable(WakeupTree, Ownership)
+     wakeup_tree = make_wakeup_tree_transferable(WakeupTree)
     }.
 
 %% TODO add message_queue_transferable pattern
@@ -4059,12 +4035,12 @@ make_id_transferable({Pid, PosInt}) when is_pid(Pid) ->
   {pid_to_list(Pid), PosInt};
 make_id_transferable(Other) -> Other.
 
+-spec make_term_transferable(term()) -> term().
 
 %% This looks in the content of the message for pids
 %% and converts them to string.
 %% TODO: check what else types are needed to be taken
 %% into consideration
-
 make_term_transferable(Term) when is_pid(Term) ->
 %% Neeed this atom to let concuerror know when to revert a pidlist back to a pid.
 %% I could generally avoid this but then I would have a problem when a message is a 
@@ -4112,11 +4088,10 @@ make_event_info_transferable(#builtin_event{} = BuiltinEvent) ->
      trapping = Trapping
     } = BuiltinEvent,
   {Module, Fun, Args} = MFArgs,
-  maybe_new_ets_table(BuiltinEvent),
   TranferableArgs = [make_term_transferable(Arg) || Arg <- Args],
   Transferable = #builtin_event_transferable{
      actor = pid_to_list(Actor),
-     extra = Extra,
+     extra = maybe_new_extra_transferable(BuiltinEvent),
      exiting = Exiting,
      mfargs = {Module, Fun, TranferableArgs}, %% TODO check if I need to fix this as well
      result = make_term_transferable(Result), %% TODO check if I need to fix this as well
@@ -4178,18 +4153,32 @@ make_event_info_transferable(#exit_event{} = ExitEvent) ->
      trapping = Trapping
     }.
 
-maybe_new_ets_table(
+%% maybe_new_ets_table(
+%%   #builtin_event{
+%%      extra = Extra,
+%%      mfargs = {ets, new, Args}
+%%     } = _) ->
+%%   ets:insert(ets_transferable, {Extra, make_term_transferable(Args)});
+%% maybe_new_ets_table(_) ->
+%%   ok.
+
+maybe_new_extra_transferable(
   #builtin_event{
      extra = Extra,
-     mfargs = {ets, new, Args}
-    } = _) ->
-  ets:insert(ets_transferable, {Extra, make_term_transferable(Args)});
-maybe_new_ets_table(_) ->
-  ok.
+     mfargs = {ets, _, _}
+    } = _E) 
+  when is_reference(Extra) ->
+  %%  exit({_E, ets:tab2list(ets_tid_to_ref)}),
+  [{Extra, Ref, TransferableArgs}] = ets:lookup(ets_tid_to_ref, Extra),
+  {Ref, TransferableArgs};
+maybe_new_extra_transferable(
+ #builtin_event{
+   extra = Extra
+   } = _) ->
+  Extra.
 
-
-make_wakeup_tree_transferable([], _) -> [];
-make_wakeup_tree_transferable([Head|Rest], TraceStateOwnership) ->
+make_wakeup_tree_transferable([]) -> [];
+make_wakeup_tree_transferable([Head|Rest]) ->
   #backtrack_entry{
      conservative = Conservative,
      event = Event,
@@ -4205,9 +4194,9 @@ make_wakeup_tree_transferable([Head|Rest], TraceStateOwnership) ->
        ownership = 
          %% TODO: this will not be completely correct, FIX it!!!!
          Ownership,
-       wakeup_tree = make_wakeup_tree_transferable(WUT, TraceStateOwnership) %% this make sense for optimal, maybe need to change
+       wakeup_tree = make_wakeup_tree_transferable(WUT) %% this make sense for optimal, maybe need to change
       },
-  [NewHead|make_wakeup_tree_transferable(Rest, TraceStateOwnership)].
+  [NewHead|make_wakeup_tree_transferable(Rest)].
 
 %%------------------------------------------------------------------------------
 %% Tranferable state -> Playable State
@@ -4219,49 +4208,48 @@ revert_state(PreviousState, ReducedState) ->
      last_scheduled = LastScheduled,
      need_to_replay = NeedToReplay,
      origin = Origin,
-     processes_ets_tables = ProcessesEtsTables,
+     %% processes_ets_tables = ProcessesEtsTables,
      safe = Safe, %% safe meens that this fragment has not been distributed
      %% TODO maybe remove this
      trace = Trace
     } = ReducedState,
-  ets:new(ets_transferable, [named_table, public]),
-  maybe_create_new_tables(ProcessesEtsTables),
+  %% ets:new(ets_transferable, [named_table, public]),
+  %% maybe_create_new_tables(ProcessesEtsTables),
   NewState =
     PreviousState#scheduler_state{
     interleaving_id = InterleavingId,
     last_scheduled = list_to_pid(LastScheduled),
     need_to_replay = NeedToReplay,
     origin = Origin,
-    trace = [revert_trace_state(TraceState, Safe) || TraceState <- Trace]
+    trace = [revert_trace_state(TraceState) || TraceState <- Trace]
    },
-  ets:delete(ets_transferable),
+  %% ets:delete(ets_transferable),
   NewState.
 
-maybe_create_new_tables([]) ->
-  ok;
-maybe_create_new_tables([{OldTid, Args}|Rest]) ->
-  case node(OldTid) =:= node() of
-    true ->
-      %% no need to create new ets_table
-      ok;
-    false ->
-      %% create new ets_table
-      [Name, Options] = revert_term(Args),
-      NoNameOptions = [O || O <- Options, O =/= named_table],
-      NewTid = ets:new(Name, NoNameOptions ++ [public]),
-      %% true = ets:give_away(T, Scheduler, given_to_scheduler), TODO remove
-      ets:insert(ets_transferable, {OldTid, NewTid}),
-      maybe_create_new_tables(Rest)       
-  end.
+%% maybe_create_new_tables([]) ->
+%%   ok;
+%% maybe_create_new_tables([{OldTid, Args}|Rest]) ->
+%%   case node(OldTid) =:= node() of
+%%     true ->
+%%       %% no need to create new ets_table
+%%       ok;
+%%     false ->
+%%       %% create new ets_table
+%%       [Name, Options] = revert_term(Args),
+%%       NoNameOptions = [O || O <- Options, O =/= named_table],
+%%       NewTid = ets:new(Name, NoNameOptions ++ [public]),
+%%       %% true = ets:give_away(T, Scheduler, given_to_scheduler), TODO remove
+%%       ets:insert(ets_transferable, {OldTid, NewTid}),
+%%       maybe_create_new_tables(Rest)       
+%%   end.
         
-revert_trace_state(TraceState, Safe) ->
+revert_trace_state(TraceState) ->
   #trace_state_transferable{ 
      actors = Actors,
      clock_map = ClockMapList,
      done = Done,
      enabled = Enabled,
      index = Index,
-     ownership = Ownership,
      unique_id = UniqueId,
      previous_actor = PreviousActor,
      scheduling_bound = SchedulingBound,
@@ -4276,7 +4264,6 @@ revert_trace_state(TraceState, Safe) ->
      done = [revert_event(Event) || Event <- Done],
      enabled = [revert_actor(Actor) || Actor <- Enabled],
      index = Index,
-     ownership = Ownership and Safe,
      unique_id = UniqueId,
      previous_actor = revert_actor(PreviousActor),
      scheduling_bound = SchedulingBound,
@@ -4454,15 +4441,21 @@ revert_event_info(#exit_event_transferable{} = ExitEvent) ->
 
 maybe_change_extra(
   #builtin_event_transferable{
-     extra = OldTid,
+     extra = {Ref, TransferableArgs},
      mfargs = {ets, _, _}}
-  = _)
-  when is_reference(OldTid) ->
-  case node(OldTid) =:= node() of
-    true ->
-      OldTid;
-    false ->
-      ets:lookup_element(ets_transferable, OldTid, 2)
+  = _) ->
+  case ets:lookup(ets_ref_to_tid, Ref) of
+    [] ->
+      %% this ets table does not exist here
+      [Name, Options] = revert_term(TransferableArgs),
+      NoNameOptions = [O || O <- Options, O =/= named_table],
+      NewTid = ets:new(Name, NoNameOptions ++ [public]),
+      %% true = ets:give_away(T, Scheduler, given_to_scheduler), TODO remove
+      ets:insert(ets_tid_to_ref, {NewTid, Ref, TransferableArgs}),
+      ets:insert(ets_ref_to_tid, {Ref, NewTid, TransferableArgs}),
+      NewTid;
+    [{Ref, Extra, TransferableArgs}] -> 
+      Extra
   end;
 maybe_change_extra(#builtin_event_transferable{extra = Extra} = _) ->
    Extra.
