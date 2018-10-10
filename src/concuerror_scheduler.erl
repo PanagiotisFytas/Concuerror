@@ -3075,14 +3075,14 @@ insert_new_trace_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
         %% TraceState is on the same level as child
         %%io:fwrite("1~n"),
         WuTInsertedChildren = insert_wut_into_children(NextOwnedWuT, Suffix),
-        false = have_duplicates(WuTInsertedChildren),
+        %% false = have_duplicates(WuTInsertedChildren),
         UpdatedChild = insert_new_trace_aux([NextTraceState|Rest], Child), 
         Prefix ++ [UpdatedChild] ++ WuTInsertedChildren;
       {Children, []} ->
         %%io:fwrite("2~n"),
         WuTInsertedChildren = insert_wut_into_children(NextOwnedWuT, []),
         [true =:= determine_ownership(E) || E <- NextWuT],
-        false = have_duplicates(WuTInsertedChildren),
+        %% false = have_duplicates(WuTInsertedChildren),
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
         Children ++ [NewChild] ++ WuTInsertedChildren
     end,
