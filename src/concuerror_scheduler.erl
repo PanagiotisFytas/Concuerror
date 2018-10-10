@@ -3086,21 +3086,21 @@ insert_new_trace_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
         Children ++ [NewChild] ++ WuTInsertedChildren
     end,
-  case have_duplicates(TraceInsertedChildren) of
-    true ->
-      io:fwrite("Event:~p~n", [Event]),
-      io:fwrite("------------------------~n"),
-      [print_tree("", Ch) || Ch <- Children],
-      io:fwrite("+++++++++++++++++++++++~n"),
-      [print_tree("", Ch) || Ch <- TraceInsertedChildren],
-      io:fwrite("^^^^^^^^^^^^^^^^^^^^^^^^~n"),
-      io:fwrite("NextEvent:~p~n", [NextEvent]),
-      [print_tree("", Ch) || Ch <- wut_to_exec_tree(NextWuT)],
-      exit(error);
+  %% case have_duplicates(TraceInsertedChildren) of
+  %%   true ->
+  %%     io:fwrite("Event:~p~n", [Event]),
+  %%     io:fwrite("------------------------~n"),
+  %%     [print_tree("", Ch) || Ch <- Children],
+  %%     io:fwrite("+++++++++++++++++++++++~n"),
+  %%     [print_tree("", Ch) || Ch <- TraceInsertedChildren],
+  %%     io:fwrite("^^^^^^^^^^^^^^^^^^^^^^^^~n"),
+  %%     io:fwrite("NextEvent:~p~n", [NextEvent]),
+  %%     [print_tree("", Ch) || Ch <- wut_to_exec_tree(NextWuT)],
+  %%     exit(error);
     
-    _ ->
-      ok
-  end,
+  %%   _ ->
+  %%     ok
+  %% end,
   %%false = have_duplicates(TraceInsertedChildren),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
