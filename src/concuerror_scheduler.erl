@@ -399,11 +399,12 @@ explore_scheduling_parallel(State) ->
 
 plan(State) ->
   %% maybe replay
+  ReplayedState = explore(State#scheduler_state{need_to_replay = true}),
   #scheduler_state{
      interleaving_id = IID,
      interleavings_explored = IE
     } = State,
-  RacesDetectedState = plan_more_interleavings(State),
+  RacesDetectedState = plan_more_interleavings(ReplayedState),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
   Controller = State#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
@@ -432,6 +433,7 @@ plan(State) ->
 planner_loop(State) ->
   receive
     {plan, TransferableState} ->
+      io:fwrite("planning~n"),
       StartTime = erlang:monotonic_time(?time_unit),
       ReceivedState = revert_state(State, TransferableState),
       FixedState =
@@ -466,6 +468,7 @@ own_next_interleaving(#scheduler_state{trace = [TraceState|_]} = _State) ->
 loop(State) ->
   receive
     start ->
+      io:fwrite("starting~n"),
       FixedState =
         State#scheduler_state{
           interleavings_explored = 0,
@@ -474,6 +477,7 @@ loop(State) ->
       NewState = explore_scheduling_parallel(FixedState),
       loop(NewState);
     {explore, TransferableState} ->
+      io:fwrite("exploring~n"),
       StartTime = erlang:monotonic_time(?time_unit),
       ReceivedState = revert_state(State, TransferableState),
       FixedState =
@@ -516,16 +520,19 @@ size_of_backtrack_transferable([TraceState|Rest]) ->
 size_of_backtrack_transferable_aux([]) -> 0;
 size_of_backtrack_transferable_aux([BacktrackEntry|Rest]) ->
   Count =
-    case determine_ownership(BacktrackEntry) of
-      owned ->
-        1;
-      not_owned ->
-        0;
-      disputed ->
-        1
+    case BacktrackEntry#backtrack_entry_transferable.wakeup_tree of
+      [] ->
+        case determine_ownership(BacktrackEntry) of
+          owned ->
+            1;
+          not_owned ->
+            0
+        end;
+      _ ->
+        0
     end,
   Count
-  %% + size_of_backtrack_aux(BacktrackEntry#backtrack_entry.wakeup_tree)
+  + size_of_backtrack_aux(BacktrackEntry#backtrack_entry_transferable.wakeup_tree)
     + size_of_backtrack_transferable_aux(Rest).
 
 %% %% all this needs to change this is not anymore the work of scheduler
@@ -580,7 +587,7 @@ explore(State) ->
       %% scheduler crashes
       case State#scheduler_state.parallel of
         true ->
-          State#scheduler_state.controller ! {done, self()};
+          State#scheduler_state.controller ! {done, self(), nvm, nvm};
         false ->
          ok
       end,
@@ -3092,30 +3099,30 @@ insert_new_trace_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
         %% TraceState is on the same level as child
         %%io:fwrite("1~n"),
         WuTInsertedChildren = insert_wut_into_children(NextOwnedWuT, Suffix),
-        %% false = have_duplicates(WuTInsertedChildren),
+        false = have_duplicates(WuTInsertedChildren),
         UpdatedChild = insert_new_trace_aux([NextTraceState|Rest], Child), 
         Prefix ++ [UpdatedChild] ++ WuTInsertedChildren;
       {Children, []} ->
         WuTInsertedChildren = insert_wut_into_children(NextOwnedWuT, []),
         [true =:= determine_ownership(E) || E <- NextWuT],
-        %% false = have_duplicates(WuTInsertedChildren),
+        false = have_duplicates(WuTInsertedChildren),
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
         Children ++ [NewChild] ++ WuTInsertedChildren
     end,
-  %% case have_duplicates(TraceInsertedChildren) of
-  %%   true ->
-  %%     io:fwrite("Event:~p~n", [Event]),
-  %%     io:fwrite("------------------------~n"),
-  %%     [print_tree("", Ch) || Ch <- Children],
-  %%     io:fwrite("+++++++++++++++++++++++~n"),
-  %%     [print_tree("", Ch) || Ch <- TraceInsertedChildren],
-  %%     io:fwrite("^^^^^^^^^^^^^^^^^^^^^^^^~n"),
-  %%     io:fwrite("NextEvent:~p~n", [NextEvent]),
-  %%     [print_tree("", Ch) || Ch <- wut_to_exec_tree(NextWuT)],
-  %%     exit(error);    
-  %%   _ ->
-  %%     ok
-  %% end,
+  case have_duplicates(TraceInsertedChildren) of
+    true ->
+      io:fwrite("Event:~p~n", [Event]),
+      io:fwrite("------------------------~n"),
+      [print_tree("", Ch) || Ch <- Children],
+      io:fwrite("+++++++++++++++++++++++~n"),
+      [print_tree("", Ch) || Ch <- TraceInsertedChildren],
+      io:fwrite("^^^^^^^^^^^^^^^^^^^^^^^^~n"),
+      io:fwrite("NextEvent:~p~n", [NextEvent]),
+      [print_tree("", Ch) || Ch <- wut_to_exec_tree(NextWuT)],
+      exit(error);    
+    _ ->
+      ok
+  end,
   %%false = have_duplicates(TraceInsertedChildren),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
@@ -3459,6 +3466,7 @@ reclaim_ownership_aux(
     } = Entry,
   ExecTreeWuT
  ) ->
+  not_owned = Ownership,
   case split_wut_with(Event, ExecTreeWuT) of
     {Prefix, [EqualEntry|Suffix]} ->
       NewEntry =
@@ -3688,7 +3696,6 @@ distribute_interleavings(State) ->
      dpor = DPOR,
      trace = Trace
     } = State,
-  EntriesGiven = BacktrackSize - 1,
   NewFragmentTraces =
     distribute_interleavings_aux(lists:reverse(Trace), [], [], DPOR),
   NewFragments =
@@ -3746,7 +3753,10 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
         TraceState#trace_state_transferable{
           wakeup_tree = RestEntries
          },
-      GivenEntries = distribute_wut(OwnedEntry),
+      GivenEntries = [OwnedEntry],%%distribute_wut(OwnedEntry),
+      %% true = (size_of_backtrack_transferable_aux([OwnedEntry]) =:= length(GivenEntries)),
+      %% GE = [size_of_backtrack_transferable_aux([G]) || G <- GivenEntries],
+      %% true = (lists:sum(GE) =:= length(GivenEntries)),
       NewFragmentTraces =
         [
          [TraceState#trace_state_transferable{wakeup_tree = [GivenEntry]}|RevTracePrefix]
