@@ -85,7 +85,7 @@
           conservative = false  :: boolean(),
           event                 :: event(),
           origin = 1            :: interleaving_id(),
-          ownership = not_owned :: owned | not_owned | disputed,
+          ownership = not_owned :: owned | not_owned,
           wakeup_tree = []      :: event_tree()
          }).
 
@@ -189,7 +189,7 @@
           conservative = false  :: boolean(),
           event                 :: event_transferable(),
           origin = 1            :: interleaving_id(),          
-          ownership = not_owned :: owned | not_owned | disputed,
+          ownership = not_owned :: owned | not_owned,
           wakeup_tree = []      :: event_tree_transferable()
          }).
 
@@ -334,7 +334,13 @@ run(Options) ->
                 scheduler_number = SchedulerNumber,
                 replay_mode = pseudo
                }, %% TODO fix this
-            loop(FixedState)
+            loop(FixedState);
+          {planner, PlannerNumber} ->
+            InitialState#scheduler_state{
+              scheduler_number = PlanerNumber,
+              replay_mode = pseudo
+             }, %% TODO fix this
+            planner_loop(FixedState);
         end,
       concuerror_callback:cleanup_processes(Processes),
       Controller ! finished,
@@ -387,12 +393,12 @@ explore_scheduling_parallel(State) ->
   Controller = State#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
   Controller !
-    {exploration_finished, self(), make_state_transferable(LogState)},
-  WuTUpdatedState = 
-    receive {updated_trace, TransferableState} ->
-      revert_state(State, TransferableState)
-    end,
-  RacesDetectedState = plan_more_interleavings(WuTUpdatedState),
+    {exploration_finished, self(), LogState, Duration, IE+1}
+  LogState.
+
+plan(State) ->
+  %% maybe replay
+  RacesDetectedState = plan_more_interleavings(State),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
   case HasMore of
     true ->
@@ -415,6 +421,23 @@ explore_scheduling_parallel(State) ->
       Controller ! {done, self(), Duration, IE+1}
   end,
   NewState.
+
+planner_loop(State)
+  receive
+    {explore, TransferableState} ->
+      StartTime = erlang:monotonic_time(?time_unit),
+      ReceivedState = revert_state(State, TransferableState),
+      FixedState =
+        ReceivedState#scheduler_state{
+          interleavings_explored = 0,
+          replay_mode = actual,
+          start_time = StartTime
+         },
+      NewState = plan(FixedState),
+      planner_loop(NewState);
+    finish ->
+      ok
+  end.
 
 own_next_interleaving(#scheduler_state{trace = [TraceState|_]} = _State) ->
   #trace_state{
@@ -454,16 +477,6 @@ loop(State) ->
          },
       NewState = explore_scheduling_parallel(FixedState),
       loop(NewState);
-    %% {explore, non_stop, TransferableState} ->
-    %%   ReceivedState = revert_state(State, TransferableState),
-    %%   FixedState =
-    %%     ReceivedState#scheduler_state{
-    %%       replay_mode = actual
-    %%      },
-    %%   explore_scheduling(FixedState), %% TODO fix this
-    %%   #scheduler_state{controller = Controller} = State,
-    %%   Controller ! {done, self()},
-    %%   loop(State);
     finish ->
       ok
   end.
@@ -2142,45 +2155,51 @@ split_wut_at_owned(WuT) ->
 %%     end,
 %%   lists:sort(SortFun, WuT).
 
+determine_ownership(#backtrack_entry{ownership = O} = _) ->
+  O;
+determine_ownership(#backtrack_entry_transferable{ownership = O} = _) ->
+  O.
+
+
 %% returns owned if at least one leaf entry
 %% is owned or disputed if at least one is
 %% disputed else returns not_owned
-determine_ownership(
-  #backtrack_entry{
-     ownership = Ownership,
-     wakeup_tree = []
-    } = _) ->
-  Ownership;
-determine_ownership(
-  #backtrack_entry_transferable{
-     ownership = Ownership,
-     wakeup_tree = []
-    } = _) ->
-  Ownership;
-determine_ownership(
-  #backtrack_entry{
-     ownership = Ownership,
-     wakeup_tree = NextWuT
-    } = _) ->
-  Ownership = not_owned,
-  determine_ownership(NextWuT, not_owned);
-determine_ownership(
-  #backtrack_entry_transferable{
-     ownership = Ownership,
-     wakeup_tree = NextWuT
-    } = _) ->
-  Ownership = not_owned,
-  determine_ownership(NextWuT, not_owned).
+%% determine_ownership(
+%%   #backtrack_entry{
+%%      ownership = Ownership,
+%%      wakeup_tree = []
+%%     } = _) ->
+%%   Ownership;
+%% determine_ownership(
+%%   #backtrack_entry_transferable{
+%%      ownership = Ownership,
+%%      wakeup_tree = []
+%%     } = _) ->
+%%   Ownership;
+%% determine_ownership(
+%%   #backtrack_entry{
+%%      ownership = Ownership,
+%%      wakeup_tree = NextWuT
+%%     } = _) ->
+%%   Ownership = not_owned,
+%%   determine_ownership(NextWuT, not_owned);
+%% determine_ownership(
+%%   #backtrack_entry_transferable{
+%%      ownership = Ownership,
+%%      wakeup_tree = NextWuT
+%%     } = _) ->
+%%   Ownership = not_owned,
+%%   determine_ownership(NextWuT, not_owned).
 
-determine_ownership([], TempOwnership) ->
-  TempOwnership;
-determine_ownership([Entry|Rest], TempOwnership) ->
-  case determine_ownership(Entry) of
-    owned ->
-      owned;
-    _ ->
-      determine_ownership(Rest, TempOwnership)
-  end.
+%% determine_ownership([], TempOwnership) ->
+%%   TempOwnership;
+%% determine_ownership([Entry|Rest], TempOwnership) ->
+%%   case determine_ownership(Entry) of
+%%     owned ->
+%%       owned;
+%%     _ ->
+%%       determine_ownership(Rest, TempOwnership)
+%%   end.
 
 replay(#scheduler_state{need_to_replay = false} = State) ->
   State;
@@ -3715,20 +3734,21 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
           wakeup_tree = []
          },
       distribute_interleavings_aux(Rest, [UpdatedTraceState|RevTracePrefix], FragmentTraces, optimal);
-    {NotOwnedWuT, [GivenEntry|RestEntries]} ->
+    {NotOwnedWuT, [OwnedEntry|RestEntries]} ->
       UpdatedTraceState =
         TraceState#trace_state_transferable{
           wakeup_tree = RestEntries
          },
-      NewFragmentTraceState =
-        TraceState#trace_state_transferable{
-          %% wakeup_tree = [UnloadedEntry],
-          wakeup_tree = [GivenEntry]
-         },
+      GivenEntries = distribute_wut(OwnedEntry),
+      NewFragmentTraces =
+        [
+         [TraceState#trace_state_transferable{wakeup_tree = [GivenEntry]}|RevTracePrefix]
+         || GivenEntry <- GivenEntries
+        ],
       NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
       distribute_interleavings_aux([UpdatedTraceState|Rest],
                                    RevTracePrefix,
-                                   [NewFragmentTrace|FragmentTraces],
+                                   NewFragmentTraces ++ FragmentTraces,
                                    optimal)
   end.
 
@@ -3747,20 +3767,22 @@ fix_wut_ownership(#backtrack_entry_transferable{wakeup_tree = WuT} = Entry, Owne
     wakeup_tree = fix_wut_ownership(WuT, Ownership)
    }.
 
-distribute_wut([]) ->  
+distribute_wut(#backtrack_entry_transferable{ownership = not_owned} = _) ->
   [];
-distribute_wut([Entry|Rest]) ->
-  distribute_wut_aux(Entry) ++ distribute_wut(Rest).
-
-distribute_wut_aux(#backtrack_entry_transferable{wakeup_tree = []} = Entry) ->
+distribute_wut(#backtrack_entry_transferable{wakeup_tree = []} = Entry) ->
   [Entry];
-distribute_wut_aux(Entry) ->
+distribute_wut(Entry) ->
   #backtrack_entry_transferable{
      wakeup_tree = WuT
     } = Entry,
-  DistributedWuT = distribute_wut(WuT),
+  DistributedWuT = distribute_wut_aux(WuT),
   [Entry#backtrack_entry_transferable{wakeup_tree = [DistributedEntry]} ||
     DistributedEntry <- DistributedWuT].
+
+distribute_wut_aux([]) ->  
+  [];
+distribute_wut_aux([Entry|Rest]) ->
+  distribute_wut(Entry) ++ distribute_wut_aux(Rest).
 
 %% %%------------------------------------------------------------------------------
 
