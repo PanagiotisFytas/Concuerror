@@ -336,11 +336,12 @@ run(Options) ->
                }, %% TODO fix this
             loop(FixedState);
           {planner, PlannerNumber} ->
-            InitialState#scheduler_state{
-              scheduler_number = PlanerNumber,
-              replay_mode = pseudo
-             }, %% TODO fix this
-            planner_loop(FixedState);
+            FixedState =
+              InitialState#scheduler_state{
+                scheduler_number = PlannerNumber,
+                replay_mode = pseudo
+               }, %% TODO fix this
+            planner_loop(FixedState)
         end,
       concuerror_callback:cleanup_processes(Processes),
       Controller ! finished,
@@ -393,13 +394,19 @@ explore_scheduling_parallel(State) ->
   Controller = State#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
   Controller !
-    {exploration_finished, self(), LogState, Duration, IE+1}
+    {exploration_finished, self(), make_state_transferable(LogState), Duration, IE+1},
   LogState.
 
 plan(State) ->
   %% maybe replay
+  #scheduler_state{
+     interleaving_id = IID,
+     interleavings_explored = IE
+    } = State,
   RacesDetectedState = plan_more_interleavings(State),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
+  Controller = State#scheduler_state.controller,
+  Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
   case HasMore of
     true ->
       %% TODO add termination when testing something that I do not own
@@ -411,20 +418,20 @@ plan(State) ->
       %%                               replay_mode = pseudo
       %%                              });
     false ->
-      case NewState#scheduler_state.scheduler_number of
-        2 ->
-          io:fwrite("EXITSTATE ~n~p~n", [NewState]);
-        _ ->
-          ok
-      end,
+      %% case NewState#scheduler_state.scheduler_number of
+      %%   2 ->
+      %%     io:fwrite("EXITSTATE ~n~p~n", [NewState]);
+      %%   _ ->
+      %%     ok
+      %% end,
       %% concuerror_callback:reset_processes(State#scheduler_state.processes),
       Controller ! {done, self(), Duration, IE+1}
   end,
   NewState.
 
-planner_loop(State)
+planner_loop(State) ->
   receive
-    {explore, TransferableState} ->
+    {plan, TransferableState} ->
       StartTime = erlang:monotonic_time(?time_unit),
       ReceivedState = revert_state(State, TransferableState),
       FixedState =
@@ -1892,7 +1899,7 @@ insert_wakeup_parallel([Node|Rest],  NotDep,  Bound,  Origin, Ownership) ->
                 #backtrack_entry{
                    event = Event,
                    origin = M,
-                   ownership = Ownership
+                   ownership = Ownership,
                    %% ownership = determine_ownership(Ownership, NewTree),
                    %% %% makes sure the the ownership at the parents gets adjusted
                    wakeup_tree = NewTree
@@ -3745,7 +3752,7 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
          [TraceState#trace_state_transferable{wakeup_tree = [GivenEntry]}|RevTracePrefix]
          || GivenEntry <- GivenEntries
         ],
-      NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
+      %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
       distribute_interleavings_aux([UpdatedTraceState|Rest],
                                    RevTracePrefix,
                                    NewFragmentTraces ++ FragmentTraces,

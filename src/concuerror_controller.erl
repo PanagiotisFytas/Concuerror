@@ -7,14 +7,16 @@
 -include("concuerror.hrl").
 
 -record(controller_status, {
-          execution_tree       :: concuerror_scheduler:execution_tree(),
-          schedulers_uptime    :: maps:map(),
-          busy                 :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
-          idle                 :: [pid()],
-          idle_frontier        :: [concuerror_scheduler:reduced_scheduler_state()],
-          scheduling_start     :: integer(),
-          ownership_claims = 0 :: integer(),
-          planner              :: pid()
+          execution_tree              :: concuerror_scheduler:execution_tree(),
+          schedulers_uptime           :: maps:map(),
+          busy                        :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
+          idle                        :: [pid()],
+          idle_frontier               :: queues:queue(),%%[concuerror_scheduler:reduced_scheduler_state()],
+          scheduling_start            :: integer(),
+          ownership_claims = 0        :: integer(),
+          planner                     :: pid(),
+          planner_queue = queue:new() :: queues:queue(),
+          planner_status = idle       :: busy | idle
          }).
 
 %%------------------------------------------------------------------------------
@@ -33,6 +35,13 @@ initialize_controller(Nodes) ->
   N = length(SchedulerNodes),
   SchedulerNumbers = maps:from_list(lists:zip(SchedulerNodes, lists:seq(1, N))),
   UnsortedSchedulers = get_schedulers(N, SchedulerNumbers),
+  Planner =
+    receive
+      {scheduler, Pid} ->
+        PlannerId = 0,
+        Pid ! {planner, PlannerId},
+        Pid
+    end,
   Fun =
     fun({_, IdA}, {_, IdB}) ->
         IdA < IdB
@@ -44,15 +53,19 @@ initialize_controller(Nodes) ->
   SchedulingStart = erlang:monotonic_time(),
   %% InitUptimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
   %% Uptimes = update_scheduler_started(InitialScheduler, InitUptimes),
-  receive {exploration_finished, InitialScheduler, ExploredFragment} ->
-      InitialScheduler ! {updated_trace, ExploredFragment}
-  end,
-  {IdleFrontier, ExecutionTree, Duration, InterleavingsExplored} =
+  {Duration, InterleavingsExplored} =
+    receive {exploration_finished, InitialScheduler, ExploredFragment, D, IE} ->
+        Planner ! {plan, ExploredFragment},
+        {D, IE}
+    end,
+  {IdleFrontier, ExecutionTree} =
     receive
-      {has_more, InitialScheduler, NewFragment, D, IE} ->
-        {[NewFragment], concuerror_scheduler:initialize_execution_tree(NewFragment), D, IE};
+      {has_more, Planner, NewFragment, _D, _IE} ->
+        IF = concuerror_scheduler:distribute_interleavings(NewFragment),
+        ET = concuerror_scheduler:initialize_execution_tree(NewFragment),
+        {IF, ET};
       {done, InitialScheduler, D, IE} ->
-        {[], empty, D, IE}
+        {[], empty}
     end,
   InitUptimes = maps:from_list([{Pid, {SchedId, 0, 0}} || {Pid, SchedId} <- Schedulers]),
   NewUptimes = update_scheduler_stopped(InitialScheduler, InitUptimes, Duration, InterleavingsExplored),
@@ -64,7 +77,8 @@ initialize_controller(Nodes) ->
        busy = Busy,
        execution_tree = ExecutionTree,
        idle = Idle,
-       idle_frontier = IdleFrontier,
+       idle_frontier = queue:from_list(IdleFrontier),
+       planner = Planner,
        scheduling_start = SchedulingStart
       },
   controller_loop(InitialStatus).
@@ -80,39 +94,69 @@ get_schedulers(N, SchedulerNumbers) ->
 
 controller_loop(#controller_status{
                    busy = Busy,
-                   idle_frontier = IdleFrontier
-                  } = Status)
-  when IdleFrontier =:= [] andalso Busy =:= [] ->
-  SchedulingEnd = erlang:monotonic_time(),
-  %% TODO : remove this check
-  %% empty = Status#controller_status.execution_tree, %% this does not hold true
-  case Status#controller_status.execution_tree =/= empty of
-    true ->
-      ok;%%concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
+                   idle_frontier = IdleQueue,
+                   planner_queue = PlannerQueue,
+                   planner_status = PlannerStatus
+                  } = Status) ->
+  case 
+    Busy =:= []
+    andalso PlannerStatus =:= idle
+    andalso queue:is_empty(PlannerQueue)
+    andalso queue:is_empty(IdleQueue) 
+  of 
     false ->
-      ok
-  end,
-  #controller_status{
-     schedulers_uptime = _Uptimes,
-     idle = Idle,
-     scheduling_start = SchedulingStart
-    } = Status,
-  [Scheduler ! finish || Scheduler <- Idle],
-  [receive finished -> ok end || _ <- Idle],
-  receive
-    {stop, Pid} ->
-      %%SchedulingEnd = erlang:monotonic_time(),
-      report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
-      Pid ! done
-  end;
-controller_loop(Status) ->
+      controller_loop_aux(Status);
+    true ->
+      SchedulingEnd = erlang:monotonic_time(),
+      %% TODO : remove this check
+      %% empty = Status#controller_status.execution_tree, %% this does not hold true
+      case Status#controller_status.execution_tree =/= empty of
+        true ->
+          ok;%%concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
+        false ->
+          ok
+      end,
+      #controller_status{
+         schedulers_uptime = _Uptimes,
+         idle = Idle,
+         scheduling_start = SchedulingStart,
+         planner = Planner
+        } = Status,
+      [Scheduler ! finish || Scheduler <- [Planner|Idle]],
+      [receive finished -> ok end || _ <- [Planner|Idle]],
+      receive
+        {stop, Pid} ->
+          %%SchedulingEnd = erlang:monotonic_time(),
+          report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
+          Pid ! done
+      end
+  end.
+
+controller_loop_aux(Status) ->
   #controller_status{
      busy = Busy,
      %% idle = Idle,
-     idle_frontier = IdleFrontier
+     execution_tree = ExecutionTree,
+     idle_frontier = IdleFrontier,
+     planner = Planner,
+     planner_queue = PlannerQueue,
+     planner_status = PlannerStatus
     } = Status,
-  NewIdleFrontier = partition(IdleFrontier, ?fragmentation_val - length(Busy)),
-  NewStatus = assign_work(Status#controller_status{idle_frontier = NewIdleFrontier}),
+  PlannedStatus =
+    case PlannerStatus =:= idle andalso not queue:is_empty(PlannerQueue) of
+      true ->
+        {{value, NextFragment}, Rest} = queue:out(PlannerQueue),
+        WuTUpdatedFragment =
+          concuerror_scheduler:update_trace_from_exec_tree(NextFragment, ExecutionTree),
+        Planner ! {plan, WuTUpdatedFragment},
+        Status#controller_status{
+          planner_queue = Rest,
+          planner_status = busy
+         };
+      false ->
+        Status
+    end,
+  NewStatus = assign_work(Status),
   wait_scheduler_response(NewStatus).
 
 wait_scheduler_response(Status) ->
@@ -122,66 +166,53 @@ wait_scheduler_response(Status) ->
      execution_tree = ExecutionTree,
      idle = Idle,
      idle_frontier = IdleFrontier,
-     ownership_claims = OC
+     ownership_claims = OC,
+     planner = Planner,
+     planner_queue = PlannerQueue
     } = Status,
   receive
-    {exploration_finished, Scheduler, ExploredFragment} ->
-      WuTUpdatedFragment =
-        concuerror_scheduler:update_trace_from_exec_tree(ExploredFragment, ExecutionTree),
-      Scheduler ! {updated_trace, WuTUpdatedFragment},
+    {exploration_finished, Scheduler, ExploredFragment, Duration, IE} ->
       {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
-      receive
-        {has_more, Scheduler, NewIdleFragment, Duration, IE} ->
-          NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-          NewExecutionTree =
-            concuerror_scheduler:insert_new_trace(NewIdleFragment, ExecutionTree),
-          NewIdleFrontier =
-            case NewIdleFragment =:= fragment_finished of
-              false ->
-                [NewIdleFragment|IdleFrontier];
-              true ->
-                exit(impossible),
-                IdleFrontier
-            end,
-          controller_loop(Status#controller_status{
-                            schedulers_uptime = NewUptimes,
-                            busy = NewBusy,
-                            execution_tree = NewExecutionTree,
-                            idle = NewIdle,
-                            idle_frontier = NewIdleFrontier,
-                            ownership_claims = OC + 1
-                           });
-        {done, Scheduler, Duration, IE} ->
-          NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-          NewExecutionTree =
-            ExecutionTree,
-          %%concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
-          controller_loop(Status#controller_status{
-                            schedulers_uptime = NewUptimes,
-                            busy = NewBusy,
-                            execution_tree = NewExecutionTree,
-                            idle = NewIdle
-                           });
-
-        {stop, Pid} ->
-          SchedulingEnd = erlang:monotonic_time(),
-          %% TODO : remove this check
-          %% empty = Status#controller_status.execution_tree, %% this does not hold true
-          #controller_status{
-             schedulers_uptime = _Uptimes,
-             idle = Idle,
-             busy = Busy,
-             scheduling_start = SchedulingStart
-            } = Status,
-          BusyPids = [Pid || {Pid, _} <- Busy],
-          Schedulers = [Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
-          [Scheduler ! finish || Scheduler <- Schedulers],
-          [receive finished -> ok end || _ <- Schedulers],
-          report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
-          Pid ! done
-      end;
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      NewPlannerQueue = queue:in(ExploredFragment, PlannerQueue),
+      controller_loop(Status#controller_status{
+                        schedulers_uptime = NewUptimes,
+                        busy = NewBusy,
+                        idle = NewIdle,
+                        ownership_claims = OC + 1,
+                        planner_queue = NewPlannerQueue
+                       });
+    {has_more, Planner, FullNewFragment, Duration, IE} ->
+      %% NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      NewExecutionTree =
+        concuerror_scheduler:insert_new_trace(FullNewFragment, ExecutionTree),
+      NewFragments =
+        concuerror_scheduler:distribute_interleavings(FullNewFragment),
+      NewIdleFrontier =
+        case FullNewFragment =:= fragment_finished of
+          false ->
+            NewFragmentsQueue = queue:from_list(NewFragments),
+            queue:join(IdleFrontier, NewFragmentsQueue);
+          true ->
+            exit(impossible),
+            IdleFrontier
+        end,
+      controller_loop(Status#controller_status{
+                        planner_status = idle,
+                        execution_tree = NewExecutionTree,
+                        idle_frontier = NewIdleFrontier
+                       });
+    {done, Scheduler, Duration, IE} ->
+      %% NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      NewExecutionTree =
+        ExecutionTree,
+      %%concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
+      controller_loop(Status#controller_status{
+                        execution_tree = NewExecutionTree,
+                        planner_status = idle
+                       });
     {stop, Pid} ->
       SchedulingEnd = erlang:monotonic_time(),
       %% TODO : remove this check
@@ -190,10 +221,11 @@ wait_scheduler_response(Status) ->
          schedulers_uptime = _Uptimes,
          idle = Idle,
          busy = Busy,
-         scheduling_start = SchedulingStart
+         scheduling_start = SchedulingStart,
+         planner = Planner
         } = Status,
       BusyPids = [Pid || {Pid, _} <- Busy],
-      Schedulers = [Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
+      Schedulers = [Scheduler || Scheduler <- [Planner|Idle] ++ BusyPids, is_non_local_process_alive(Scheduler)],
       [Scheduler ! finish || Scheduler <- Schedulers],
       [receive finished -> ok end || _ <- Schedulers],
       report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
@@ -241,29 +273,6 @@ assign_work(Status) ->
      },
   assign_work(UpdatedStatus).
   
-%%------------------------------------------------------------------------------
-
-partition(Frontier, N) ->
-  %% it should be N =:= ?fragmentation_val - #of active fragments
-  %% need to fix the number to account for active fragments
-  AdditionalFragmentsNeeded = N - length(Frontier),
-  partition_aux(Frontier, AdditionalFragmentsNeeded, []).
-
-%% TODO figure out if it matter whether I put new fragments in
-%% the begining or not
-partition_aux([], N, Frontier) when N =/= 0 ->
-  %% The frontier cannot be further partitioned (probably).
-  Frontier;
-partition_aux(Frontier, 0, PartitionedFrontier) ->
-  %% when length(Frontier) + length(PartitionedFrontier) = N ->
-  Frontier ++ PartitionedFrontier;
-partition_aux([Fragment|Rest], FragmentsNeeded, PartitionedFrontier) ->
-  true = FragmentsNeeded > 0,
-  {UpdatedFragment, NewFragments, FragmentsGotten} =
-    concuerror_scheduler:distribute_interleavings(Fragment, FragmentsNeeded),
-  NewPartitionedFrontier = NewFragments ++ [UpdatedFragment|PartitionedFrontier],
-  partition_aux(Rest, FragmentsNeeded - FragmentsGotten, NewPartitionedFrontier).
-
 %%------------------------------------------------------------------------------
 
 -spec stop(pid()) -> ok.
