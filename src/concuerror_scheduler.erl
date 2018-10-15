@@ -2701,7 +2701,7 @@ update_execution_tree_aux(
                                 [FC#event_transferable.actor || FC <- FinishedChildren]),
             {ActiveChildren, []}
         end,
-      NewActiveChild = initialize_execution_tree_aux([NextTraceState|Rest]),
+      NewActiveChild = initialize_execution_tree_aux([UpdatedNextTraceState|Rest]),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
           active_children = [NewActiveChild|UpdatedActiveChildren],
