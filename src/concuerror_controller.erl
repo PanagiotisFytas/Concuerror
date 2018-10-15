@@ -169,10 +169,10 @@ wait_scheduler_response(Status) ->
      planner = Planner,
      planner_queue = PlannerQueue
     } = Status,
-  io:fwrite("wait response~n"),
+  %% io:fwrite("wait response~n"),
   receive
     {exploration_finished, Scheduler, ExploredFragment, Duration, IE} ->
-      io:fwrite("expo finished~n"),
+      %% io:fwrite("expo finished~n"),
       {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
@@ -186,7 +186,7 @@ wait_scheduler_response(Status) ->
                         planner_queue = NewPlannerQueue
                        });
     {has_more, Planner, FullNewFragment, Duration, IE} ->
-      io:fwrite("has more~n"),
+      %% io:fwrite("has more~n"),
       %% NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       NewExecutionTree =
         concuerror_scheduler:insert_new_trace(FullNewFragment, ExecutionTree),
@@ -207,7 +207,7 @@ wait_scheduler_response(Status) ->
                         idle_frontier = NewIdleFrontier
                        });
     {done, Scheduler, Duration, IE} ->
-      io:fwrite("done~n"),
+      %% io:fwrite("done~n"),
       %% NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       NewExecutionTree =
         ExecutionTree,
@@ -217,7 +217,7 @@ wait_scheduler_response(Status) ->
                         planner_status = idle
                        });
     {stop, Pid} ->
-      io:fwrite("stop~n"),
+      %% io:fwrite("stop~n"),
       SchedulingEnd = erlang:monotonic_time(),
       %% TODO : remove this check
       %% empty = Status#controller_status.execution_tree, %% this does not hold true
@@ -319,7 +319,7 @@ report_stats_parallel(Status, Start, End) ->
      schedulers_uptime = Uptimes,
      ownership_claims = OC
     } = Status,
-  io:fwrite("Ownership Claims: ~B~n", [OC]), 
+  %% io:fwrite("Ownership Claims: ~B~n", [OC]), 
   report_stats(Uptimes, Start, End).
 
 -spec report_stats(maps:map(), integer(), integer()) -> ok.
