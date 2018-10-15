@@ -3751,7 +3751,7 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
     {NotOwnedWuT, [OwnedEntry|RestEntries]} ->
       UpdatedTraceState =
         TraceState#trace_state_transferable{
-          wakeup_tree = NotOwnedWuT ++ fix_wut_ownership(OwnedEntry, not_owned) ++ RestEntries
+          wakeup_tree = NotOwnedWuT ++ [fix_wut_ownership(OwnedEntry, not_owned)] ++ RestEntries
          },
       GivenEntries = [OwnedEntry],%%distribute_wut(OwnedEntry),
       %% true = (size_of_backtrack_transferable_aux([OwnedEntry]) =:= length(GivenEntries)),
