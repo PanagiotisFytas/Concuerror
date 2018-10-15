@@ -3753,14 +3753,14 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
         TraceState#trace_state_transferable{
           wakeup_tree = NotOwnedWuT ++ [fix_wut_ownership(OwnedEntry, not_owned)] ++ RestEntries
          },
-      GivenEntries = [OwnedEntry],%%distribute_wut(OwnedEntry),
+      GivenEntries = distribute_wut(OwnedEntry),
       %% true = (size_of_backtrack_transferable_aux([OwnedEntry]) =:= length(GivenEntries)),
       %% GE = [size_of_backtrack_transferable_aux([G]) || G <- GivenEntries],
       %% true = (lists:sum(GE) =:= length(GivenEntries)),
       NewFragmentTraces =
         [
          [TraceState#trace_state_transferable{wakeup_tree = NotOwnedWuT ++ [GivenEntry]}|RevTracePrefix]
-         || GivenEntry <- GivenEntries
+         || GivenEntry <- GivenEntries , get_rightmost_ownership(GivenEntry) =:= owned
         ],
       %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
       distribute_interleavings_aux([UpdatedTraceState|Rest],
@@ -3795,22 +3795,33 @@ distribute_wut(Entry) ->
   DistributedWuT = distribute_wut_aux(WuT),
   %% [Entry#backtrack_entry_transferable{wakeup_tree = [DistributedEntry]} ||
   %%   DistributedEntry <- DistributedWuT].
-  keep_prev_entries(DistributedWuT, []).
+  [Entry#backtrack_entry_transferable{wakeup_tree = En} ||
+    En <- keep_prev_entries(DistributedWuT, [])].
 
 keep_prev_entries([], _) -> [];
 keep_prev_entries([Entry|Rest], Acc) ->
-    case determine_ownership(Entry) of
-      owned ->
-        [lists:reverse(Acc) ++ Entry|
-         keep_prev_entries(Rest, [fix_wut_ownership(Entry, not_owned)|Acc])];
-      not_owned ->
-         keep_prev_entries(Rest, [fix_wut_ownership(Entry, not_owned)|Acc])
-    end.
+    %% case determine_ownership(Entry) of
+    %%   owned ->
+  [lists:reverse(Acc) ++ [Entry]|
+   keep_prev_entries(Rest, [fix_wut_ownership(Entry, not_owned)|Acc])].
+    %%   not_owned ->
+    %%      keep_prev_entries(Rest, [fix_wut_ownership(Entry, not_owned)|Acc])
+    %% end.
 
 distribute_wut_aux([]) ->  
   [];
 distribute_wut_aux([Entry|Rest]) ->
   distribute_wut(Entry) ++ distribute_wut_aux(Rest).
+
+get_rightmost_ownership(
+  #backtrack_entry_transferable{
+     wakeup_tree = [] = _,
+     ownership = Ownership
+    } = _) ->
+  Ownership;
+get_rightmost_ownership(Entry) ->
+  get_rightmost_ownership(lists:last(Entry#backtrack_entry_transferable.wakeup_tree)).
+
 
 %% %%------------------------------------------------------------------------------
 
