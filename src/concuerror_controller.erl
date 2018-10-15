@@ -170,6 +170,7 @@ wait_scheduler_response(Status) ->
      planner_queue = PlannerQueue
     } = Status,
   %% io:fwrite("wait response~n"),
+  io:fwrite("OC:~w~n", [OC]),
   receive
     {exploration_finished, Scheduler, ExploredFragment, Duration, IE} ->
       %% io:fwrite("expo finished~n"),
