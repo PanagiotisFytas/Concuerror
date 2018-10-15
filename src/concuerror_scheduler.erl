@@ -3740,8 +3740,10 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
   %%     done = [H|RestBacktrackEvents] ++ T
   %%    },
   %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
+  io:fwrite("4~n"),
   case split_wut_at_owned(WuT) of
     {WuT, []} ->
+      io:fwrite("5a~n"),
       %% no owned
       UpdatedTraceState =
         TraceState#trace_state_transferable{
@@ -3749,11 +3751,14 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
          },
       distribute_interleavings_aux(Rest, [UpdatedTraceState|RevTracePrefix], FragmentTraces, optimal);
     {NotOwnedWuT, [OwnedEntry|RestEntries]} ->
+      io:fwrite("5b~n"),
       UpdatedTraceState =
         TraceState#trace_state_transferable{
           wakeup_tree = NotOwnedWuT ++ [fix_wut_ownership(OwnedEntry, not_owned)] ++ RestEntries
          },
+      io:fwrite("6~n"),
       GivenEntries = distribute_wut(OwnedEntry),
+      io:fwrite("7~n"),
       %% true = (size_of_backtrack_transferable_aux([OwnedEntry]) =:= length(GivenEntries)),
       %% GE = [size_of_backtrack_transferable_aux([G]) || G <- GivenEntries],
       %% true = (lists:sum(GE) =:= length(GivenEntries)),
@@ -3762,6 +3767,7 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, FragmentTraces, 
          [TraceState#trace_state_transferable{wakeup_tree = NotOwnedWuT ++ [GivenEntry]}|RevTracePrefix]
          || GivenEntry <- GivenEntries , get_rightmost_ownership(GivenEntry) =:= owned
         ],
+      io:fwrite("8~n"),
       %% NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
       distribute_interleavings_aux([UpdatedTraceState|Rest],
                                    RevTracePrefix,
