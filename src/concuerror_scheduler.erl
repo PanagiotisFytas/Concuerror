@@ -2089,6 +2089,12 @@ logically_equal_aux(Fun, NewFun)
     andalso erlang:fun_info(Fun, module) =:= erlang:fun_info(NewFun, module)
     andalso erlang:fun_info(Fun, arity) =:= erlang:fun_info(NewFun, arity);
 %% TODO remove this
+logically_equal_aux(Ref, undefined)
+  when is_reference(Ref) ->
+  true;
+logically_equal_aux(undefined, Ref)
+  when is_reference(Ref) ->
+  true;
 logically_equal_aux(Ref, NewRef)
   when is_reference(Ref) andalso is_reference(NewRef) ->
   true;
