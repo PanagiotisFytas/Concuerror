@@ -189,7 +189,7 @@ wait_scheduler_response(Status) ->
       %% that have been explored by it 
       NewIdle = [Scheduler|Idle],
       NewExecutionTree =
-        concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
+        ExecutionTree,%%concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
                         busy = NewBusy,

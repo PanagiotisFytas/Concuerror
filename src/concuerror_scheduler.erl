@@ -2502,20 +2502,21 @@ update_execution_tree_aux(
   {UpdatedActiveChildren, MaybeNewFinishedChild} =
     case split_active_children(OldNextActiveEvent, ActiveChildren) of
       {Prefix, [OldChild|Suffix]} ->
-        case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
-          {node_finished, Event} ->
-            exit(impossible3),
-            {Prefix ++ Suffix, [Event]};
-          {maybe_finished, MaybeFinishedChild} ->
-            %% case ReducedWuT of
-            %%   [] ->
-            %%     {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
-            %%   _ ->
-            {Prefix ++ [MaybeFinishedChild] ++ Suffix, []};
-            %% end;
-          UpdatedChild ->
-            {Prefix ++ [UpdatedChild] ++ Suffix, []}
-        end;
+        %% case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
+        %%   {node_finished, Event} ->
+        %%     exit(impossible3),
+        %%     {Prefix ++ Suffix, [Event]};
+        %%   {maybe_finished, MaybeFinishedChild} ->
+        %%     %% case ReducedWuT of
+        %%     %%   [] ->
+        %%     %%     {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
+        %%     %%   _ ->
+        %%     {Prefix ++ [MaybeFinishedChild] ++ Suffix, []};
+        %%     %% end;
+        %%   UpdatedChild ->
+        %%     {Prefix ++ [UpdatedChild] ++ Suffix, []}
+        %% end;
+        {ActiveChildren, []};
       {ActiveChildren, []} ->
         %% TODO : maybe remove these checks
         %%[] = OldRest,
@@ -2672,19 +2673,20 @@ update_execution_tree_aux(
       {UpdatedActiveChildren, MaybeNewFinishedChild} =
         case split_active_children(OldNextActiveEvent, ActiveChildren) of
           {Prefix, [OldChild|Suffix]} ->
-            case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
-              {node_finished, Event} ->
-                exit(impossible4),
-                {Prefix ++ Suffix, [Event]};
-              {maybe_finished, MaybeFinishedChild} ->
-                %% case ReducedWuT of
-                %%   [] ->
-                %%     {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
-                %%   _ ->
-                {Prefix ++ [MaybeFinishedChild] ++ Suffix, []};
-              UpdatedChild ->
-                {Prefix ++ [UpdatedChild] ++ Suffix, []}
-            end;
+            %% case update_execution_tree_done_aux([OldNextTraceState|OldRest], OldChild) of
+            %%   {node_finished, Event} ->
+            %%     exit(impossible4),
+            %%     {Prefix ++ Suffix, [Event]};
+            %%   {maybe_finished, MaybeFinishedChild} ->
+            %%     %% case ReducedWuT of
+            %%     %%   [] ->
+            %%     %%     {Prefix ++ Suffix, [MaybeFinishedChild#execution_tree.event]};
+            %%     %%   _ ->
+            %%     {Prefix ++ [MaybeFinishedChild] ++ Suffix, []};
+            %%   UpdatedChild ->
+            %%     {Prefix ++ [UpdatedChild] ++ Suffix, []}
+            %% end;
+            {ActiveChildren, []};
           {ActiveChildren, []} ->
             %% TODO : maybe remove these checks
             %%[] = OldRest,
