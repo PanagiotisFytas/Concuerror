@@ -160,6 +160,9 @@ options() ->
   ,{number_of_schedulers, [experimental], undefined, {integer, 3},
     "Number of workers used in parallel mode",
     nolong}
+  ,{budget, [experimental], undefined, {integer, 1000},
+    "The budget of each scheduler",
+    nolong}
   ,{optimal, [por], undefined, boolean,
     "Synonym for `--dpor optimal (true) | source (false)`.",
     nolong}
@@ -324,7 +327,8 @@ check_validity(Key) ->
         Key =:= depth_bound;
         Key =:= print_depth;
         Key =:= max_processes;
-        Key =:= number_of_schedulers
+        Key =:= number_of_schedulers;
+        Key =:= budget
         ->
       {fun(V) -> V > 0 end, "a positive integer"};
     dpor ->

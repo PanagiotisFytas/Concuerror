@@ -7,15 +7,16 @@
 -include("concuerror.hrl").
 
 -record(controller_status, {
-                            fragmentation_val :: non_neg_integer(),
-                            execution_tree    :: concuerror_scheduler:execution_tree(),
-                            schedulers_uptime :: maps:map(),
-                            busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
-                            idle              :: [pid()],
-                            idle_frontier     :: [concuerror_scheduler:reduced_scheduler_state()],
-                            scheduling_start  :: integer(),
+                            fragmentation_val    :: non_neg_integer(),
+                            execution_tree       :: concuerror_scheduler:execution_tree(),
+                            schedulers_uptime    :: maps:map(),
+                            busy                 :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
+                            idle                 :: [pid()],
+                            idle_frontier        :: [concuerror_scheduler:reduced_scheduler_state()],
+                            scheduling_start     :: integer(),
                             budget_exceeded = 0  :: integer(),
-                            ownership_claims = 0 :: integer()
+                            ownership_claims = 0 :: integer(),
+                            budget               :: integer()
                            }).
 
 %%------------------------------------------------------------------------------
@@ -63,7 +64,8 @@ initialize_controller(Nodes, Options) ->
        execution_tree = ExecutionTree,
        idle = Idle,
        idle_frontier = IdleFrontier,
-       scheduling_start = SchedulingStart
+       scheduling_start = SchedulingStart,
+       budget = ?opt(budget, Options)
       },
   controller_loop(InitialStatus).
 
@@ -240,11 +242,12 @@ assign_work(#controller_status{
 assign_work(Status) ->
   #controller_status{
      busy = Busy,
+     budget = Budget,
      schedulers_uptime = Uptimes,
      idle = [Scheduler|RestIdle],
      idle_frontier = [Fragment|RestIdleFrontier]
     } = Status,
-  Scheduler ! {explore, Fragment, ?budget/length([Scheduler|RestIdle])},
+  Scheduler ! {explore, Fragment, Budget/length([Scheduler|RestIdle])},
   NewUptimes = Uptimes, %% update_scheduler_started(Scheduler, Uptimes),
   UpdatedStatus =
     Status#controller_status{
