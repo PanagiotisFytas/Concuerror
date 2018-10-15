@@ -170,7 +170,6 @@ wait_scheduler_response(Status) ->
      planner_queue = PlannerQueue
     } = Status,
   %% io:fwrite("wait response~n"),
-  io:fwrite("OC:~w~n", [OC]),
   receive
     {exploration_finished, Scheduler, ExploredFragment, Duration, IE} ->
       %% io:fwrite("expo finished~n"),
@@ -189,13 +188,10 @@ wait_scheduler_response(Status) ->
     {has_more, Planner, FullNewFragment, Duration, IE} ->
       %% io:fwrite("has more~n"),
       %% NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      io:fwrite("1~n"),
       NewExecutionTree =
         concuerror_scheduler:insert_new_trace(FullNewFragment, ExecutionTree),
-      io:fwrite("2~n"),
       NewFragments =
         concuerror_scheduler:distribute_interleavings(FullNewFragment),
-      io:fwrite("3~n"),
       NewIdleFrontier =
         case FullNewFragment =:= fragment_finished of
           false ->
