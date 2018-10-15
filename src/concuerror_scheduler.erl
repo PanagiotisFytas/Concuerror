@@ -1888,8 +1888,38 @@ replay(State) ->
   S = io_lib:format("New interleaving ~p. Replaying...", [N]),
   ?time(Logger, S),
   NewState = replay_prefix(NewTrace, State#scheduler_state{trace = NewTrace}),
+  FixedState =
+    case State#scheduler_state.replay_mode of
+      pseudo ->
+        NewState;
+      actual ->
+        FixedNewTrace = fix_sleep_sets(lists:reverse(NewTrace), [], State),
+        NewState#scheduler_state{trace = FixedNewTrace}
+    end,
   ?debug(Logger, "~s~n",["Replay done."]),
-  NewState#scheduler_state{need_to_replay = false}.
+  FixedState#scheduler_state{need_to_replay = false}.
+
+fix_sleep_sets([Last], Acc, _) ->
+  [Last|Acc];
+fix_sleep_sets([TraceState, NextTraceState|Rest], Acc, State) ->
+  #trace_state{
+     sleep_set = SleepSet,
+     done = Done
+    } = TraceState,
+  #trace_state{
+     sleep_set = NextSleepSet,
+     done = NextDone
+    } = NextTraceState,
+  [Event|_] = NextDone,
+  AllSleepSet =
+    ordsets:union(ordsets:union(ordsets:from_list(Done), SleepSet), NextSleepSet),
+  FixedNextSleepSet = update_sleep_set(Event, AllSleepSet, State),
+  UpdatedNextTraceState =
+    NextTraceState#trace_state{
+      sleep_set = FixedNextSleepSet
+     },
+  fix_sleep_sets([UpdatedNextTraceState|Rest], [TraceState|Acc], State).
+
 
 %% =============================================================================
 
@@ -3116,8 +3146,8 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
     TraceState#trace_state_transferable{
       %% wakeup_tree = [UnloadedEntry],
       %% sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
-      wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}]
-      %% done = [H|RestBacktrackEvents] ++ T
+      wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}],
+      done = [H|RestBacktrackEvents] ++ T
      },
   NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
   distribute_interleavings_aux([UpdatedTraceState|Rest],
@@ -3154,6 +3184,14 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
                                N-1,
                                [NewFragmentTrace|FragmentTraces],
                                optimal).
+
+%% split_wut_at_owned(WuT) ->
+%%   Pred =
+%%     fun(Entry) ->
+%%         determine_ownership(Entry) =:= not_owned
+%%     end,
+
+%%   lists:splitwith(Pred, WuT).
 
 %% distribute_wut(_WuT, 0, DistributedWuTs) ->
 %%   DistributedWuTs;
