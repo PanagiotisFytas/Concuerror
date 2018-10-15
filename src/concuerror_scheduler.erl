@@ -1910,7 +1910,8 @@ fix_sleep_sets([TraceState, NextTraceState|Rest], Acc, State) ->
      sleep_set = NextSleepSet,
      done = NextDone
     } = NextTraceState,
-  [Event|_] = NextDone,
+  [NextEvent|_] = NextDone,
+  [Event|_] = Done,
   AllSleepSet =
     ordsets:union(ordsets:union(ordsets:from_list(Done), SleepSet), NextSleepSet),
   FixedNextSleepSet = update_sleep_set(Event, AllSleepSet, State),
