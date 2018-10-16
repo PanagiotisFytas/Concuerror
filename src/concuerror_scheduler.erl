@@ -1910,11 +1910,11 @@ fix_sleep_sets([TraceState, NextTraceState|Rest], Acc, State) ->
      sleep_set = NextSleepSet,
      done = NextDone
     } = NextTraceState,
-  [NextEvent|_] = NextDone,
-  [Event|_] = Done,
+  [NextEvent|NT] = NextDone,
+  [Event|T] = Done,
   AllSleepSet =
-    ordsets:union(ordsets:union(ordsets:from_list(Done), SleepSet), NextSleepSet),
-  FixedNextSleepSet = update_sleep_set(Event, AllSleepSet, State),
+    ordsets:union(ordsets:from_list(Done ++ NextSleepSet ++ NT), SleepSet),
+  FixedNextSleepSet = update_sleep_set(NextEvent, AllSleepSet, State),
   UpdatedNextTraceState =
     NextTraceState#trace_state{
       sleep_set = FixedNextSleepSet
@@ -2674,6 +2674,7 @@ update_execution_tree_aux(
   {NewOwnedWuT, NewNotOwnedWuT} =
     get_ownership(DisputedWuT, ActiveEvents, [], []),
   NewNotOwnedEvents = [Entry#backtrack_entry_transferable.event || Entry <- NewNotOwnedWuT],
+  %% SleepChildren = filter_children(Children, OwnedWut ++ NewOwnedWuT),
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
       %%sleep_set =  NewNotOwnedEvents ++ _Sleep,
