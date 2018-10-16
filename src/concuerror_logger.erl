@@ -89,7 +89,6 @@ timediff(After, Before) ->
 %%          controller       :: pid(),
           jobs             :: queue:queue(),
           logger           :: pid(),
-          total_schedulers :: pos_integer(),
           schedulers       :: maps:map()
          }).
 
@@ -1177,7 +1176,6 @@ initialize_wrapper(Options, Logger) ->
 %%     controller = ?opt(controller, Options),
      jobs = queue:new(),
      logger = Logger,
-     total_schedulers = ?number_of_schedulers,
      schedulers = maps:from_list(lists:zip(Nodes, lists:seq(1, length(Nodes))))
     }. 
 

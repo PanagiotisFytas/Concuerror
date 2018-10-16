@@ -183,9 +183,9 @@
           lists:max(
             [list_to_pid(PidList) || PidList <- PidLists]
            ))).
--define(number_of_schedulers, 3).
+%%-define(number_of_schedulers, 3).
 -define(balancing_limit, 1).
--define(fragmentation_val, 2*?number_of_schedulers).
+%%-define(fragmentation_val, 2*?number_of_schedulers).
 -define(time_unit, milli_seconds).
 -define(budget, 1000).
 

@@ -113,11 +113,12 @@ controller_loop(#controller_status{
   end;
 controller_loop(Status) ->
   #controller_status{
+     fragmentation_val = FragmentationVal,
      busy = Busy,
      %% idle = Idle,
      idle_frontier = IdleFrontier
     } = Status,
-  NewIdleFrontier = partition(IdleFrontier, ?fragmentation_val - length(Busy)),
+  NewIdleFrontier = partition(IdleFrontier, FragmentationVal - length(Busy)),
   NewStatus = assign_work(Status#controller_status{idle_frontier = NewIdleFrontier}),
   wait_scheduler_response(NewStatus).
 
