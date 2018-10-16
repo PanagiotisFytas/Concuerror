@@ -58,7 +58,8 @@ initialize_controller(Nodes, Options) ->
   Idle = SchedulerPids,
   InitialStatus =
     #controller_status{
-       fragmentation_val = 2*?opt(number_of_schedulers, Options),
+       fragmentation_val =
+         max(?opt(fragmentation_value, Options),?opt(number_of_schedulers, Options)),
        schedulers_uptime = NewUptimes,
        busy = Busy,
        execution_tree = ExecutionTree,
