@@ -1913,11 +1913,11 @@ fix_sleep_sets([TraceState, NextTraceState|Rest], Acc, State) ->
   [NextEvent|NT] = NextDone,
   [Event|T] = Done,
   AllSleepSet =
-    ordsets:union(ordsets:from_list(Done ++ NextSleepSet ++ NT), SleepSet),
-  FixedNextSleepSet = update_sleep_set2(NextEvent, AllSleepSet, State),
+    ordsets:union(ordsets:from_list(T), SleepSet),
+  FixedNextSleepSet = update_sleep_set2(Event, AllSleepSet, State),
   UpdatedNextTraceState =
     NextTraceState#trace_state{
-      sleep_set = FixedNextSleepSet
+      sleep_set = FixedNextSleepSet%%ordsets:union(FixedNextSleepSet)
      },
   fix_sleep_sets([UpdatedNextTraceState|Rest], [TraceState|Acc], State).
 
@@ -3179,14 +3179,14 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
   UpdatedTraceState =
     TraceState#trace_state_transferable{
       wakeup_tree = RestBacktrack,
-      sleep_set = [UnloadedBacktrackEvent|SleepSet],
+      %%sleep_set = [UnloadedBacktrackEvent|SleepSet],
       done = [H, UnloadedBacktrackEvent|T]
      },
   NewFragmentTraceState =
     TraceState#trace_state_transferable{
       %% wakeup_tree = [UnloadedEntry],
       wakeup_tree = [UnloadedEntry#backtrack_entry_transferable{ownership = owned}],
-      sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
+      %%sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
       done = [H|RestBacktrackEvents] ++ T
      },
   NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],
