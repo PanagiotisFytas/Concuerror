@@ -186,7 +186,7 @@
           conservative = false  :: boolean(),
           event                 :: event_transferable(),
           origin = 1            :: interleaving_id(),          
-          ownership = displuted :: owned | not_owned | disputed,
+          ownership = not_owned :: owned | not_owned | disputed,
           wakeup_tree = []      :: event_tree_transferable()
          }).
 
@@ -2695,7 +2695,7 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
     EntriesLeft = size_of_backtrack_transferable(lists:reverse(RevNewTrace))
   catch _:_:_ ->
       io:fwrite("Old:~n~p~nNew:~n~p~n", [lists:reverse(Trace), RevNewTrace]),
-      io:fwrite("foook~n~n"),
+      io:fwrite("error~n~n"),
       receive
       after 1000 ->
           ok
@@ -2901,7 +2901,7 @@ update_execution_tree_aux(
   %%                [Ex#execution_tree.event || Ex <- WuTInsertedChildren],
   %%                NextWuT]
   %%              ),
-  %%     exit(foooook)
+  %%     exit(error)
   %% end,
   try true = length(WuTInsertedChildren) >= length(Children)
   catch _:_:_ ->
@@ -2909,8 +2909,9 @@ update_execution_tree_aux(
                 [[Ex#execution_tree.event || Ex <- Children],
                  [Ex#execution_tree.event || Ex <- WuTInsertedChildren]]
                ),
-      exit(foooook)
+      exit(error)
   end,
+  AllSleep = NextDone,
   UpdatedNextTraceState =
     NextTraceState#trace_state_transferable{
       %%sleep_set =  NewNotOwnedEvents ++ _Sleep,
@@ -2920,7 +2921,7 @@ update_execution_tree_aux(
       %%                   NextDone ++ NewNotOwnedEvents ++ 
       %%                     [En#backtrack_entry_transferable.event || En <- OwnedWuT ++ NewOwnedWuT]
       %%                  ),
-      wakeup_tree = FixedNextWuT
+      wakeup_tree = get_full_wut(FixedNextWuT, AllSleep, WuTInsertedChildren)
      },
   case logically_equal(NextActiveEvent, OldNextActiveEvent) of
     true ->
@@ -3038,7 +3039,7 @@ update_execution_tree_aux(
                 after 10000 ->
                     ok
                 end,
-                exit(foook)
+                exit(error)
             end,
             Pref ++ [initialize_execution_tree_aux([UpdatedNextTraceState|Rest])|Suff];
           {UpdatedChildren, []} ->
@@ -3069,16 +3070,74 @@ have_duplicates([Child|Rest]) ->
       have_duplicates(Rest)
   end.
 
-filter_children(ChildEvents, DoneEvents) ->
+get_full_wut(CurrentWuT, AllSleep, Children) ->
+  %%{OwnedWuT, NotOwnedWuT, []} = split_wut(CurrentWuT),
+  ExecTreeWuT = execution_tree_to_wut(filter_children(Children, AllSleep)),
+  reclaim_ownership(CurrentWuT, ExecTreeWuT).
+
+reclaim_ownership([], ExecTreeWuT) ->
+  ExecTreeWuT;
+reclaim_ownership(WuT, []) ->
+  %% WuT should be a subtree of ExecTreeWuT
+  %% exit(impossible7);
+  WuT;
+reclaim_ownership([Entry|Rest], ExecTreeWuT) ->
+  {Prefix, UpdatedExecTreeEntry, Suffix} = reclaim_ownership_aux(Entry, ExecTreeWuT),
+  Prefix ++ [UpdatedExecTreeEntry|reclaim_ownership(Rest, Suffix)].
+
+reclaim_ownership_aux(
+  #backtrack_entry_transferable{
+     event = Event,
+     wakeup_tree = WuT,
+     ownership = Ownership
+    } = Entry,
+  ExecTreeWuT
+ ) ->
+  %% not_owned = Ownership,
+  case split_wut_with(Event, ExecTreeWuT) of
+    {Prefix, [EqualEntry|Suffix]} ->
+      NewEntry =
+        EqualEntry#backtrack_entry_transferable{
+          event = Event,
+          ownership = Ownership
+         },
+      {Prefix, NewEntry, Suffix};
+    {ExecTreeWuT, []} ->
+      io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
+                [Event, ExecTreeWuT]),
+      exit(impossible7)
+  end.
+
+split_wut_with(Event, WuT) ->      
   Pred =
-    fun(ChEvent) ->
-        PredAny =
-          fun(DoneEvent) ->
-              logically_equal(DoneEvent, ChEvent)
-          end,
-        not lists:any(PredAny, DoneEvents)
+    fun(Entry) ->
+        not logically_equal(Entry#backtrack_entry_transferable.event, Event)
     end,
-  lists:filter(Pred, ChildEvents).
+  lists:splitwith(Pred, WuT).
+
+filter_children(Children, AllSleep) ->
+  AllSleepActors = [Ev#event_transferable.actor || Ev <- AllSleep],
+  Pred =
+    fun(Child) ->
+        Event = Child#execution_tree.event,
+        %% TODO check if I need to use logically_equal instead
+        Actor = Event#event_transferable.actor,
+        not lists:member(Actor, AllSleepActors)
+    end,
+  lists:filter(Pred, Children).
+
+execution_tree_to_wut([]) ->
+  [];
+execution_tree_to_wut([Node|Rest]) ->
+  #execution_tree{
+     event = Event,
+     children = Children
+    } = Node,
+  Entry =
+    #backtrack_entry_transferable{
+       event = Event
+      },
+  [Entry|execution_tree_to_wut(Rest)].
 
 insert_wut_into_children([], Children, WuTAcc, N) ->
   {Children,
