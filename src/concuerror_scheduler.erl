@@ -1914,13 +1914,22 @@ fix_sleep_sets([TraceState, NextTraceState|Rest], Acc, State) ->
   [Event|T] = Done,
   AllSleepSet =
     ordsets:union(ordsets:from_list(Done ++ NextSleepSet ++ NT), SleepSet),
-  FixedNextSleepSet = update_sleep_set(NextEvent, AllSleepSet, State),
+  FixedNextSleepSet = update_sleep_set2(NextEvent, AllSleepSet, State),
   UpdatedNextTraceState =
     NextTraceState#trace_state{
       sleep_set = FixedNextSleepSet
      },
   fix_sleep_sets([UpdatedNextTraceState|Rest], [TraceState|Acc], State).
 
+update_sleep_set2(NewEvent, SleepSet, State) ->
+  #scheduler_state{logger = _Logger} = State,
+  Pred =
+    fun(OldEvent) ->
+        V = concuerror_dependencies:dependent_safe(NewEvent, OldEvent),
+        %%?debug(_Logger, "     Awaking (~p): ~s~n", [V,?pretty_s(OldEvent)]),
+        V =:= false
+    end,
+  lists:filter(Pred, SleepSet).
 
 %% =============================================================================
 
