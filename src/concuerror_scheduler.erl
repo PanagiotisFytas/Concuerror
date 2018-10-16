@@ -2678,12 +2678,12 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
       update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree)
     catch
       C:R:S ->
-        %%io:fwrite("OldTrace:~n", []),
-        %% print_trace(lists:reverse(OldTrace)),
-        %% io:fwrite("NewTrace~n", []),
-        %% print_trace(lists:reverse(Trace)),
+        io:fwrite("OldTrace:~n", []),
+        print_trace(lists:reverse(OldTrace)),
+        io:fwrite("NewTrace~n", []),
+        print_trace(lists:reverse(Trace)),
         io:fwrite("Tree~n", []),
-        %% print_tree_relative(ExecutionTree, lists:reverse(OldTrace)),
+        print_tree_relative(ExecutionTree, lists:reverse(OldTrace)),
         exit({C,R,S})
     end,
   %% print_trace(RevNewTrace),
@@ -2718,8 +2718,21 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
 
 remove_empty_trace_states([#trace_state_transferable{wakeup_tree = []} = _|Rest]) ->
   remove_empty_trace_states(Rest);
-remove_empty_trace_states(Trace) ->
-  Trace.
+remove_empty_trace_states([TraceState|Rest]) ->
+  #trace_state_transferable{wakeup_tree = Tree} = TraceState,
+  %% TODO remove this asap
+  case split_wut_at_ownership(Tree, disputed) of
+    {Tree, []} ->
+      ok;
+    _ ->
+      exit(impossible)
+  end,
+  case split_wut_at_ownership(Tree, owned) of
+    {Tree, []} ->
+      remove_empty_trace_states(Rest);
+    _ ->
+      [TraceState|Rest]
+  end.
 
 
 update_execution_tree_aux(
@@ -3019,7 +3032,14 @@ update_execution_tree_aux(
       FixedChildren =
         case split_children(NextActiveEvent, UpdatedChildren) of
           {Pref, [NextChild|Suff]} ->
-            [] = NextChild#execution_tree.children,
+            try [] = NextChild#execution_tree.children
+            catch _:_:_ ->
+                receive
+                after 10000 ->
+                    ok
+                end,
+                exit(foook)
+            end,
             Pref ++ [initialize_execution_tree_aux([UpdatedNextTraceState|Rest])|Suff];
           {UpdatedChildren, []} ->
             UpdatedChildren ++ [initialize_execution_tree_aux([UpdatedNextTraceState|Rest])]
@@ -3410,7 +3430,7 @@ distribute_interleavings(State, FragmentsNeeded) ->
      trace = Trace
     } = State,
   EntriesGiven = min(FragmentsNeeded, BacktrackSize - 1),
-  BacktrackSize = size_of_backtrack_transferable(Trace),
+  %%BacktrackSize = size_of_backtrack_transferable(Trace),
   {UpdatedTrace , NewFragmentTraces} =
     try
       distribute_interleavings_aux(lists:reverse(Trace),[], EntriesGiven, [], DPOR)
