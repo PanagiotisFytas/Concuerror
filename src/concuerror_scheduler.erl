@@ -54,6 +54,8 @@
         ]).
 -export([print_tree/2]).
 
+-export([make_term_transferable/1]).
+
 -export_type([reduced_scheduler_state/0,
               execution_tree/0
              ]).
@@ -3874,12 +3876,12 @@ make_id_transferable({Pid, PosInt}) when is_pid(Pid) ->
   {pid_to_list(Pid), PosInt};
 make_id_transferable(Other) -> Other.
 
+-spec make_term_transferable(term()) -> term().
 
 %% This looks in the content of the message for pids
 %% and converts them to string.
 %% TODO: check what else types are needed to be taken
 %% into consideration
-
 make_term_transferable(Term) when is_pid(Term) ->
 %% Neeed this atom to let concuerror know when to revert a pidlist back to a pid.
 %% I could generally avoid this but then I would have a problem when a message is a 
@@ -3927,11 +3929,10 @@ make_event_info_transferable(#builtin_event{} = BuiltinEvent) ->
      trapping = Trapping
     } = BuiltinEvent,
   {Module, Fun, Args} = MFArgs,
-  maybe_new_ets_table(BuiltinEvent),
   TranferableArgs = [make_term_transferable(Arg) || Arg <- Args],
   Transferable = #builtin_event_transferable{
      actor = pid_to_list(Actor),
-     extra = Extra,
+     extra = maybe_new_extra_transferable(BuiltinEvent),
      exiting = Exiting,
      mfargs = {Module, Fun, TranferableArgs}, %% TODO check if I need to fix this as well
      result = make_term_transferable(Result), %% TODO check if I need to fix this as well
@@ -3993,15 +3994,29 @@ make_event_info_transferable(#exit_event{} = ExitEvent) ->
      trapping = Trapping
     }.
 
-maybe_new_ets_table(
+%% maybe_new_ets_table(
+%%   #builtin_event{
+%%      extra = Extra,
+%%      mfargs = {ets, new, Args}
+%%     } = _) ->
+%%   ets:insert(ets_transferable, {Extra, make_term_transferable(Args)});
+%% maybe_new_ets_table(_) ->
+%%   ok.
+
+maybe_new_extra_transferable(
   #builtin_event{
      extra = Extra,
-     mfargs = {ets, new, Args}
-    } = _) ->
-  ets:insert(ets_transferable, {Extra, make_term_transferable(Args)});
-maybe_new_ets_table(_) ->
-  ok.
-
+     mfargs = {ets, _, _}
+    } = _E) 
+  when is_reference(Extra) ->
+  %%  exit({_E, ets:tab2list(ets_tid_to_ref)}),
+  [{Extra, Ref, TransferableArgs}] = ets:lookup(ets_tid_to_ref, Extra),
+  {Ref, TransferableArgs};
+maybe_new_extra_transferable(
+  #builtin_event{
+    extra = Extra
+   } = _) ->
+  Extra.
 
 make_wakeup_tree_transferable([], _) -> [];
 make_wakeup_tree_transferable([Head|Rest], _TraceStateOwnership) ->
@@ -4038,13 +4053,13 @@ revert_state(PreviousState, ReducedState) ->
      last_scheduled = LastScheduled,
      need_to_replay = NeedToReplay,
      origin = Origin,
-     processes_ets_tables = ProcessesEtsTables,
+     %% processes_ets_tables = ProcessesEtsTables,
      safe = Safe, %% safe meens that this fragment has not been distributed
      %% TODO maybe remove this
      trace = Trace
     } = ReducedState,
-  ets:new(ets_transferable, [named_table, public]),
-  maybe_create_new_tables(ProcessesEtsTables),
+  %% ets:new(ets_transferable, [named_table, public]),
+  %% maybe_create_new_tables(ProcessesEtsTables),
   NewState =
     PreviousState#scheduler_state{
     interleaving_id = InterleavingId,
@@ -4053,25 +4068,25 @@ revert_state(PreviousState, ReducedState) ->
     origin = Origin,
     trace = [revert_trace_state(TraceState, Safe) || TraceState <- Trace]
    },
-  ets:delete(ets_transferable),
+  %% ets:delete(ets_transferable),
   NewState.
 
-maybe_create_new_tables([]) ->
-  ok;
-maybe_create_new_tables([{OldTid, Args}|Rest]) ->
-  case node(OldTid) =:= node() of
-    true ->
-      %% no need to create new ets_table
-      ok;
-    false ->
-      %% create new ets_table
-      [Name, Options] = revert_term(Args),
-      NoNameOptions = [O || O <- Options, O =/= named_table],
-      NewTid = ets:new(Name, NoNameOptions ++ [public]),
-      %% true = ets:give_away(T, Scheduler, given_to_scheduler), TODO remove
-      ets:insert(ets_transferable, {OldTid, NewTid}),
-      maybe_create_new_tables(Rest)       
-  end.
+%% maybe_create_new_tables([]) ->
+%%   ok;
+%% maybe_create_new_tables([{OldTid, Args}|Rest]) ->
+%%   case node(OldTid) =:= node() of
+%%     true ->
+%%       %% no need to create new ets_table
+%%       ok;
+%%     false ->
+%%       %% create new ets_table
+%%       [Name, Options] = revert_term(Args),
+%%       NoNameOptions = [O || O <- Options, O =/= named_table],
+%%       NewTid = ets:new(Name, NoNameOptions ++ [public]),
+%%       %% true = ets:give_away(T, Scheduler, given_to_scheduler), TODO remove
+%%       ets:insert(ets_transferable, {OldTid, NewTid}),
+%%       maybe_create_new_tables(Rest)       
+%%   end.
         
 revert_trace_state(TraceState, Safe) ->
   #trace_state_transferable{ 
@@ -4273,15 +4288,21 @@ revert_event_info(#exit_event_transferable{} = ExitEvent) ->
 
 maybe_change_extra(
   #builtin_event_transferable{
-     extra = OldTid,
+     extra = {Ref, TransferableArgs},
      mfargs = {ets, _, _}}
-  = _)
-  when is_reference(OldTid) ->
-  case node(OldTid) =:= node() of
-    true ->
-      OldTid;
-    false ->
-      ets:lookup_element(ets_transferable, OldTid, 2)
+  = _) ->
+  case ets:lookup(ets_ref_to_tid, Ref) of
+    [] ->
+      %% this ets table does not exist here
+      [Name, Options] = revert_term(TransferableArgs),
+      NoNameOptions = [O || O <- Options, O =/= named_table],
+      NewTid = ets:new(Name, NoNameOptions ++ [public]),
+      %% true = ets:give_away(T, Scheduler, given_to_scheduler), TODO remove
+      ets:insert(ets_tid_to_ref, {NewTid, Ref, TransferableArgs}),
+      ets:insert(ets_ref_to_tid, {Ref, NewTid, TransferableArgs}),
+      NewTid;
+    [{Ref, Extra, TransferableArgs}] -> 
+      Extra
   end;
 maybe_change_extra(#builtin_event_transferable{extra = Extra} = _) ->
    Extra.

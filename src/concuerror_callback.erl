@@ -91,6 +91,7 @@
           monitors                    :: monitors(),
           event = none                :: 'none' | event(),
           notify_when_ready           :: {pid(), boolean()},
+          parallel                    :: boolean(),
           process_spawner             :: pid(),
           processes                   :: processes(),
           receive_counter = 1         :: pos_integer(),
@@ -112,6 +113,7 @@
 spawn_first_process(Options) ->
   EtsTables = ets:new(ets_tables, [public]),
   ets:insert(EtsTables, {tid, 1}),
+  Parallel = ?opt(parallel, Options),
   Info =
     #concuerror_info{
        after_timeout  = ?opt(after_timeout, Options),
@@ -121,6 +123,7 @@ spawn_first_process(Options) ->
        logger         = ?opt(logger, Options),
        monitors       = ets:new(monitors, [bag, public]),
        notify_when_ready = {self(), true},
+       parallel = Parallel,
        process_spawner = ?opt(process_spawner, Options),
        processes      = Processes = ?opt(processes, Options),
        scheduler      = self(),
@@ -128,6 +131,7 @@ spawn_first_process(Options) ->
        timeout        = ?opt(timeout, Options),
        timers         = ets:new(timers, [public])
       },
+  set_up_parallel_ets(Parallel),
   system_processes_wrappers(Info),
   system_ets_entries(Info),
   P = new_process(Info, "P"),
@@ -972,7 +976,8 @@ run_built_in(ets, new, 2, [Name, Options], Info) ->
   #concuerror_info{
      ets_tables = EtsTables,
      event = #event{event_info = EventInfo},
-     scheduler = Scheduler
+     scheduler = Scheduler,
+     parallel = Parallel
     } = Info,
   Named =
     case Options =/= NoNameOptions of
@@ -1001,6 +1006,19 @@ run_built_in(ets, new, 2, [Name, Options], Info) ->
       undefined ->
         %% Looks like the last option is the one actually used.
         T = ets:new(Name, NoNameOptions ++ [public]),
+        case Parallel of
+          false ->
+            ok;
+          true ->
+            Ref = make_ref(),
+            TransferableArgs =
+              concuerror_scheduler:make_term_transferable([Name, Options]),
+            try
+              ets:insert(ets_tid_to_ref, {T, Ref, TransferableArgs}),
+              ets:insert(ets_ref_to_tid, {Ref, T, TransferableArgs})
+            catch C:RR:S -> exit({C,RR,S})
+            end
+        end,
         true = ets:give_away(T, Scheduler, given_to_scheduler),
         T
     end,
@@ -1813,6 +1831,13 @@ link_monitor_handlers(Handler, LinksOrMonitors) ->
   end.
 
 %%------------------------------------------------------------------------------
+
+set_up_parallel_ets(false) ->
+  ok;
+set_up_parallel_ets(true) ->
+  ets:new(ets_ref_to_tid, [public, named_table]),
+  ets:new(ets_tid_to_ref, [public, named_table]),
+  ok.
 
 check_ets_access_rights(Name, Op, Info) ->
   #concuerror_info{ets_tables = EtsTables, scheduler = Scheduler} = Info,
