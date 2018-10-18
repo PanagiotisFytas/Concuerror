@@ -3106,7 +3106,10 @@ reclaim_ownership_aux(
     {ExecTreeWuT, []} ->
       io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
                 [Event, ExecTreeWuT]),
-      exit(impossible7)
+      %% exit(impossible7)
+      NewEntry =
+        Entry,
+      {ExecTreeWuT, NewEntry}
   end.
 
 split_wut_with(Event, WuT) ->      
