@@ -113,13 +113,16 @@ start_parallel(RawOptions, OldOptions) ->
   io:fwrite("b~n"),
   LoggerOptions = [{nodes, Nodes}|OldOptions],
   LoggerWrapper = concuerror_logger:start_wrapper(LoggerOptions),
+  io:fwrite("b1~n"),
   ProcessSpawner = concuerror_process_spawner:start(LoggerOptions),
+  io:fwrite("b2~n"),
   Controller = concuerror_controller:start(Nodes, LoggerOptions),
+  io:fwrite("b3~n"),
   AdditionalOptionts = [{nodes, Nodes},
                         {process_spawner, ProcessSpawner},
                         {controller, Controller},
                         {logger_wrapper, LoggerWrapper}],
-  io:fwrite("n"),
+  io:fwrite("c~n"),
   StartFun =
     fun() ->
 	Status =
