@@ -31,9 +31,11 @@ start(Nodes, Options) ->
   spawn_link(Fun).
 
 initialize_controller(Nodes, Options) ->
+  io:fwrite("1~n"),
   N = length(Nodes),
   SchedulerNumbers = maps:from_list(lists:zip(Nodes, lists:seq(1, length(Nodes)))),
   UnsortedSchedulers = get_schedulers(N, SchedulerNumbers),
+  io:fwrite("2~n"),
   Fun =
     fun({_, IdA}, {_, IdB}) ->
         IdA < IdB
@@ -45,6 +47,7 @@ initialize_controller(Nodes, Options) ->
   SchedulingStart = erlang:monotonic_time(),
   %% InitUptimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
   %% Uptimes = update_scheduler_started(InitialScheduler, InitUptimes),
+  io:fwrite("3~n"),
   {IdleFrontier, ExecutionTree, Duration, InterleavingsExplored} =
     receive
       {budget_exceeded, InitialScheduler, NewFragment, D, IE} ->
@@ -52,6 +55,7 @@ initialize_controller(Nodes, Options) ->
       {done, InitialScheduler, D, IE} ->
         {[], empty, D, IE}
     end,
+  io:fwrite("4~n"),
   InitUptimes = maps:from_list([{Pid, {SchedId, 0, 0}} || {Pid, SchedId} <- Schedulers]),
   NewUptimes = update_scheduler_stopped(InitialScheduler, InitUptimes, Duration, InterleavingsExplored),
   Busy = [],
@@ -68,6 +72,7 @@ initialize_controller(Nodes, Options) ->
        scheduling_start = SchedulingStart,
        budget = ?opt(budget, Options)
       },
+  io:fwrite("5~n"),
   controller_loop(InitialStatus).
 
 get_schedulers(0, _) -> [];
