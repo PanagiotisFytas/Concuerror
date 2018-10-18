@@ -2599,7 +2599,6 @@ print_tree_relative(ExecTree, [TraceState]) ->
     } = TraceState,
   [OldActiveEvent|_] = Done,
   true = logically_equal(OldActiveEvent, Event),
-  exit(impossible4),
   io:fwrite("Node: ~p~n", [Event#event_transferable.actor]);
   %% [io:fwrite("~sFinishedChild: ~p~n", ["---", Ev#event_transferable.actor]) || Ev <- FinishedChildren],
   %% [io:fwrite("~sWuT: ~p~n", ["+++", (En#backtrack_entry_transferable.event)#event_transferable.actor]) || En <- WuT];
