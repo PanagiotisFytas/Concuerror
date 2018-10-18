@@ -49,6 +49,7 @@ start(Options) ->
         end
     end,
   P = spawn_link(Fun),
+  io:fwrite("lk~n"),
   receive
     process_gen_ready -> P
   end.
