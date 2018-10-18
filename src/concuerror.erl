@@ -106,23 +106,17 @@ get_scheduler_status(Reason, Logger) ->
 %%------------------------------------------------------------------------------
 
 start_parallel(RawOptions, OldOptions) ->
-  io:fwrite("a~n"),
   Nodes = concuerror_nodes:start(RawOptions),
   % The the process_spawner starts and stops will be fixed when I make the
   % process_spawner a gen_server
-  io:fwrite("b~n"),
   LoggerOptions = [{nodes, Nodes}|OldOptions],
   LoggerWrapper = concuerror_logger:start_wrapper(LoggerOptions),
-  io:fwrite("b1~n"),
   ProcessSpawner = concuerror_process_spawner:start(LoggerOptions),
-  io:fwrite("b2~n"),
   Controller = concuerror_controller:start(Nodes, LoggerOptions),
-  io:fwrite("b3~n"),
   AdditionalOptionts = [{nodes, Nodes},
                         {process_spawner, ProcessSpawner},
                         {controller, Controller},
                         {logger_wrapper, LoggerWrapper}],
-  io:fwrite("c~n"),
   StartFun =
     fun() ->
 	Status =
@@ -134,11 +128,8 @@ start_parallel(RawOptions, OldOptions) ->
 	  end,
 	  exit(Status)
     end,
-  io:fwrite("d~n"),
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
-  io:fwrite("e~n"),
   CombinedStatus = get_combined_status_logger(SchedulerWrappers, LoggerOptions),
-  io:fwrite("f~n"),
   ExitStatus = CombinedStatus, %% concuerror_logger:stop(LoggerWrapper, CombinedStatus),
   ok = concuerror_controller:stop(Controller),
   concuerror_process_spawner:stop(ProcessSpawner),
