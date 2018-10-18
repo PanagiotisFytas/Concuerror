@@ -3109,7 +3109,7 @@ reclaim_ownership_aux(
       %% exit(impossible7)
       NewEntry =
         Entry,
-      {ExecTreeWuT, NewEntry}
+      {ExecTreeWuT, NewEntry, []}
   end.
 
 split_wut_with(Event, WuT) ->      
