@@ -399,12 +399,12 @@ explore_scheduling_parallel(State) ->
 
 plan(State) ->
   %% maybe replay
-  %%ReplayedState = explore(State#scheduler_state{need_to_replay = true}),
+  ReplayedState = explore(State#scheduler_state{need_to_replay = true}),
   #scheduler_state{
      interleaving_id = IID,
      interleavings_explored = IE
     } = State,
-  RacesDetectedState = plan_more_interleavings(State),
+  RacesDetectedState = plan_more_interleavings(ReplayedState),
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
   Controller = State#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
