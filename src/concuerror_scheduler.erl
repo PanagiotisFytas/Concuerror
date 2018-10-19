@@ -3802,9 +3802,9 @@ keep_prev_entries([Entry|Rest], Acc) ->
     case determine_ownership(Entry) of
       owned ->
         [lists:reverse(Acc) ++ Entry|
-         keep_prev_entries(Rest, [fix_wut_ownership(Entry, not_owned)|Acc])];
+         keep_prev_entries(Rest, [fix_ownership([Entry], owned, not_owned)|Acc])];
       not_owned ->
-         keep_prev_entries(Rest, [fix_wut_ownership(Entry, not_owned)|Acc])
+         keep_prev_entries(Rest, [fix_ownership([Entry], owned, not_owned)|Acc])
     end.
 
 distribute_wut_aux([]) ->  
