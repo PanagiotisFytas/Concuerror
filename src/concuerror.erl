@@ -151,7 +151,7 @@ get_combined_status(SchedulerWrappers, Options, Status) ->
     {'DOWN', Ref, process, Pid, ExitStatus} ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
       Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
-      %% io:fwrite("EXiTSTATUS~w~n", [ExitStatus]),
+      io:fwrite("EXiTSTATUS~w~n", [ExitStatus]),
       case ExitStatus of
         normal ->
           get_combined_status(Rest, Status);

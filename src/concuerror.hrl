@@ -188,7 +188,7 @@
 -define(fragmentation_val, 2*?number_of_schedulers).
 -define(time_unit, milli_seconds).
 -define(budget, 1000).
--define(granularity, coarse).
+
 -ifdef(BEFORE_OTP_17).
 -define(to_list(Dict), dict:to_list(Dict)).
 -define(from_list(Dict), dict:from_list(Dict)).
