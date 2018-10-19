@@ -33,13 +33,20 @@ start(Nodes) ->
 initialize_controller(Nodes) ->
   [PlannerNode|SchedulerNodes] = Nodes,
   N = length(SchedulerNodes),
-  SchedulerNumbers = maps:from_list(lists:zip(Nodes, lists:seq(0, N))),
-  UnsortedSchedulers = get_schedulers(N+1, SchedulerNumbers),
+  SchedulerNumbers = maps:from_list(lists:zip(SchedulerNodes, lists:seq(1, N))),
+  UnsortedSchedulers = get_schedulers(N, SchedulerNumbers),
+  Planner =
+    receive
+      {scheduler, Pid} ->
+        PlannerId = 0,
+        Pid ! {planner, PlannerId},
+        Pid
+    end,
   Fun =
     fun({_, IdA}, {_, IdB}) ->
         IdA < IdB
     end,
-  [{Planner, _}|Schedulers] = lists:sort(Fun, UnsortedSchedulers),
+  Schedulers = lists:sort(Fun, UnsortedSchedulers),
   SchedulerPids = [Pid || {Pid, _} <- Schedulers],
   [InitialScheduler|_Rest] = SchedulerPids,
   InitialScheduler ! start,
@@ -47,8 +54,7 @@ initialize_controller(Nodes) ->
   %% InitUptimes = maps:from_list([{Pid, {SchedId, undefined, 0}} || {Pid, SchedId} <- Schedulers]),
   %% Uptimes = update_scheduler_started(InitialScheduler, InitUptimes),
   {Duration, InterleavingsExplored} =
-    receive
-      {exploration_finished, InitialScheduler, ExploredFragment, D, IE} ->
+    receive {exploration_finished, InitialScheduler, ExploredFragment, D, IE} ->
         Planner ! {plan, ExploredFragment},
         {D, IE}
     end,
@@ -82,12 +88,7 @@ get_schedulers(N, SchedulerNumbers) ->
   receive
     {scheduler, Pid} ->
       SchedulerId = maps:get(node(Pid), SchedulerNumbers),
-      case SchedulerId of
-        0 ->
-          Pid ! {planner, SchedulerId};
-        _ ->
-          Pid ! {scheduler_number, SchedulerId}
-      end,
+      Pid ! {scheduler_number, SchedulerId},
       [{Pid, SchedulerId} | get_schedulers(N-1, SchedulerNumbers)]
   end.
 
@@ -155,7 +156,7 @@ controller_loop_aux(Status) ->
       false ->
         Status
     end,
-  NewStatus = assign_work(PlannedStatus),
+  NewStatus = assign_work(Status),
   wait_scheduler_response(NewStatus).
 
 wait_scheduler_response(Status) ->
@@ -169,10 +170,8 @@ wait_scheduler_response(Status) ->
      planner = Planner,
      planner_queue = PlannerQueue
     } = Status,
-  io:fwrite("wait response~n"),
   receive
     {exploration_finished, Scheduler, ExploredFragment, Duration, IE} ->
-      io:fwrite("expo finished~n"),
       {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
@@ -186,7 +185,6 @@ wait_scheduler_response(Status) ->
                         planner_queue = NewPlannerQueue
                        });
     {has_more, Planner, FullNewFragment, Duration, IE} ->
-      io:fwrite("has more~n"),
       %% NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       NewExecutionTree =
         concuerror_scheduler:insert_new_trace(FullNewFragment, ExecutionTree),
@@ -207,7 +205,6 @@ wait_scheduler_response(Status) ->
                         idle_frontier = NewIdleFrontier
                        });
     {done, Scheduler, Duration, IE} ->
-      io:fwrite("done~n"),
       %% NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       NewExecutionTree =
         ExecutionTree,
@@ -217,7 +214,6 @@ wait_scheduler_response(Status) ->
                         planner_status = idle
                        });
     {stop, Pid} ->
-      io:fwrite("stop~n"),
       SchedulingEnd = erlang:monotonic_time(),
       %% TODO : remove this check
       %% empty = Status#controller_status.execution_tree, %% this does not hold true
@@ -233,9 +229,7 @@ wait_scheduler_response(Status) ->
       [Scheduler ! finish || Scheduler <- Schedulers],
       [receive finished -> ok end || _ <- Schedulers],
       report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
-      Pid ! done;
-    _Other ->
-      exit({impossible, _Other})
+      Pid ! done
   end.
 
 is_non_local_process_alive(Pid) ->
@@ -255,30 +249,29 @@ is_non_local_process_alive(Pid) ->
 %%   Scheduler ! {explore, State},
 %%   start_schedulers(RestStates, RestSchedulers, [Scheduler|Busy]).
 
+assign_work(#controller_status{
+               idle = Idle,
+               idle_frontier = IdleFrontier
+              } = Status)
+  when Idle =:= [] orelse IdleFrontier =:= []->
+  Status;
 assign_work(Status) ->
   #controller_status{
      busy = Busy,
      schedulers_uptime = Uptimes,
-     idle = Idle,
-     idle_frontier = IdleFrontier
+     idle = [Scheduler|RestIdle],
+     idle_frontier = [Fragment|RestIdleFrontier]
     } = Status,
-  case Idle =:= [] orelse queue:is_empty(IdleFrontier) of
-    true ->
-      Status;
-    false ->
-      [Scheduler|RestIdle] = Idle,
-      {{value, Fragment}, RestIdleFrontier} = queue:out(IdleFrontier),
-      Scheduler ! {explore, Fragment},
-      NewUptimes = Uptimes, %% update_scheduler_started(Scheduler, Uptimes),
-      UpdatedStatus =
-        Status#controller_status{
-          busy = [{Scheduler, Fragment}|Busy],
-          schedulers_uptime = NewUptimes,
-          idle = RestIdle,
-          idle_frontier = RestIdleFrontier
-         },
-      assign_work(UpdatedStatus)
-  end.
+  Scheduler ! {explore, Fragment},
+  NewUptimes = Uptimes, %% update_scheduler_started(Scheduler, Uptimes),
+  UpdatedStatus =
+    Status#controller_status{
+      busy = [{Scheduler, Fragment}|Busy],
+      schedulers_uptime = NewUptimes,
+      idle = RestIdle,
+      idle_frontier = RestIdleFrontier
+     },
+  assign_work(UpdatedStatus).
   
 %%------------------------------------------------------------------------------
 
