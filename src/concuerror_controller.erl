@@ -7,14 +7,13 @@
 -include("concuerror.hrl").
 
 -record(controller_status, {
-          execution_tree       :: concuerror_scheduler:execution_tree(),
-          schedulers_uptime    :: maps:map(),
-          busy                 :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
-          idle                 :: [pid()],
-          idle_frontier        :: [concuerror_scheduler:reduced_scheduler_state()],
-          scheduling_start     :: integer(),
-          ownership_claims = 0 :: integer(),
-          planner              :: pid()
+          execution_tree    :: concuerror_scheduler:execution_tree(),
+          schedulers_uptime :: maps:map(),
+          busy              :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
+          idle              :: [pid()],
+          idle_frontier     :: [concuerror_scheduler:reduced_scheduler_state()],
+          scheduling_start  :: integer(),
+          ownership_claims = 0 :: integer()
          }).
 
 %%------------------------------------------------------------------------------
@@ -29,9 +28,8 @@ start(Nodes) ->
   spawn_link(Fun).
 
 initialize_controller(Nodes) ->
-  [PlannerNode|SchedulerNodes] = Nodes,
-  N = length(SchedulerNodes),
-  SchedulerNumbers = maps:from_list(lists:zip(SchedulerNodes, lists:seq(1, N))),
+  N = length(Nodes),
+  SchedulerNumbers = maps:from_list(lists:zip(Nodes, lists:seq(1, length(Nodes)))),
   UnsortedSchedulers = get_schedulers(N, SchedulerNumbers),
   Fun =
     fun({_, IdA}, {_, IdB}) ->
