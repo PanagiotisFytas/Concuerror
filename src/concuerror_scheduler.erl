@@ -433,7 +433,7 @@ plan(State) ->
 planner_loop(State) ->
   receive
     {plan, TransferableState} ->
-      %% io:fwrite("planning~n"),
+      io:fwrite("planning~n"),
       StartTime = erlang:monotonic_time(?time_unit),
       ReceivedState = revert_state(State, TransferableState),
       FixedState =
@@ -477,7 +477,7 @@ loop(State) ->
       NewState = explore_scheduling_parallel(FixedState),
       loop(NewState);
     {explore, TransferableState} ->
-      %% io:fwrite("exploring~n"),
+      io:fwrite("exploring~n"),
       StartTime = erlang:monotonic_time(?time_unit),
       ReceivedState = revert_state(State, TransferableState),
       FixedState =
