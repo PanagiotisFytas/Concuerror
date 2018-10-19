@@ -3784,8 +3784,8 @@ fix_wut_ownership(#backtrack_entry_transferable{wakeup_tree = WuT} = Entry, Owne
     wakeup_tree = fix_wut_ownership(WuT, Ownership)
    }.
 
-%% distribute_wut(#backtrack_entry_transferable{ownership = not_owned} = _) ->
-%%   [];
+distribute_wut(#backtrack_entry_transferable{ownership = not_owned} = _) ->
+  [];
 distribute_wut(#backtrack_entry_transferable{wakeup_tree = []} = Entry) ->
   [Entry];
 distribute_wut(Entry) ->
@@ -3793,19 +3793,8 @@ distribute_wut(Entry) ->
      wakeup_tree = WuT
     } = Entry,
   DistributedWuT = distribute_wut_aux(WuT),
-  %% [Entry#backtrack_entry_transferable{wakeup_tree = [DistributedEntry]} ||
-  %%   DistributedEntry <- DistributedWuT].
-  keep_prev_entries(DistributedWuT, []).
-
-keep_prev_entries([], _) -> [];
-keep_prev_entries([Entry|Rest], Acc) ->
-    case determine_ownership(Entry) of
-      owned ->
-        [lists:reverse(Acc) ++ Entry|
-         keep_prev_entries(Rest, [fix_ownership([Entry], owned, not_owned)|Acc])];
-      not_owned ->
-         keep_prev_entries(Rest, [fix_ownership([Entry], owned, not_owned)|Acc])
-    end.
+  [Entry#backtrack_entry_transferable{wakeup_tree = [DistributedEntry]} ||
+    DistributedEntry <- DistributedWuT].
 
 distribute_wut_aux([]) ->  
   [];
