@@ -3098,30 +3098,30 @@ insert_new_trace_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
         %% TraceState is on the same level as child
         %%io:fwrite("1~n"),
         WuTInsertedChildren = insert_wut_into_children(NextOwnedWuT, Suffix),
-        false = have_duplicates(WuTInsertedChildren),
+        %false = have_duplicates(WuTInsertedChildren),
         UpdatedChild = insert_new_trace_aux([NextTraceState|Rest], Child), 
         Prefix ++ [UpdatedChild] ++ WuTInsertedChildren;
       {Children, []} ->
         WuTInsertedChildren = insert_wut_into_children(NextOwnedWuT, []),
         [true =:= determine_ownership(E) || E <- NextWuT],
-        false = have_duplicates(WuTInsertedChildren),
+        %false = have_duplicates(WuTInsertedChildren),
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
         Children ++ [NewChild] ++ WuTInsertedChildren
     end,
-  case have_duplicates(TraceInsertedChildren) of
-    true ->
-      io:fwrite("Event:~p~n", [Event]),
-      io:fwrite("------------------------~n"),
-      [print_tree("", Ch) || Ch <- Children],
-      io:fwrite("+++++++++++++++++++++++~n"),
-      [print_tree("", Ch) || Ch <- TraceInsertedChildren],
-      io:fwrite("^^^^^^^^^^^^^^^^^^^^^^^^~n"),
-      io:fwrite("NextEvent:~p~n", [NextEvent]),
-      [print_tree("", Ch) || Ch <- wut_to_exec_tree(NextWuT)],
-      exit(error);    
-    _ ->
-      ok
-  end,
+  %% case have_duplicates(TraceInsertedChildren) of
+  %%   true ->
+  %%     io:fwrite("Event:~p~n", [Event]),
+  %%     io:fwrite("------------------------~n"),
+  %%     [print_tree("", Ch) || Ch <- Children],
+  %%     io:fwrite("+++++++++++++++++++++++~n"),
+  %%     [print_tree("", Ch) || Ch <- TraceInsertedChildren],
+  %%     io:fwrite("^^^^^^^^^^^^^^^^^^^^^^^^~n"),
+  %%     io:fwrite("NextEvent:~p~n", [NextEvent]),
+  %%     [print_tree("", Ch) || Ch <- wut_to_exec_tree(NextWuT)],
+  %%     exit(error);    
+  %%   _ ->
+  %%     ok
+  %% end,
   %%false = have_duplicates(TraceInsertedChildren),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
