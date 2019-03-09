@@ -164,7 +164,7 @@ options() ->
     "The budget of each scheduler",
     nolong}
   ,{fragmentation_value, [experimental], undefined, {integer, 0},
-    "How much active fragments on the state space frontier",
+    "How many active fragments on the state space frontier",
     nolong}
   ,{optimal, [por], undefined, boolean,
     "Synonym for `--dpor optimal (true) | source (false)`.",

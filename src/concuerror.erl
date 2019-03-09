@@ -110,17 +110,27 @@ start_parallel(RawOptions, OldOptions) ->
   % The the process_spawner starts and stops will be fixed when I make the
   % process_spawner a gen_server
   LoggerOptions = [{nodes, Nodes}|OldOptions],
-  LoggerWrapper = concuerror_logger:start_wrapper(LoggerOptions),
+  % LoggerWrapper = concuerror_logger:start_wrapper(LoggerOptions),
   ProcessSpawner = concuerror_process_spawner:start(LoggerOptions),
   Controller = concuerror_controller:start(Nodes, LoggerOptions),
   AdditionalOptionts = [{nodes, Nodes},
                         {process_spawner, ProcessSpawner},
-                        {controller, Controller},
-                        {logger_wrapper, LoggerWrapper}],
+                        {controller, Controller}],
   StartFun =
     fun() ->
-	Status =
-	  case concuerror_options:finalize(RawOptions) of
+        MaybeFileName = ?opt(output, RawOptions),
+        FileName =
+          case MaybeFileName of
+            undefined ->
+              "concuerror_report.txt";
+            Name ->
+              Name
+          end,
+        [Prefix, Suffix] = string:split(FileName, "."),
+        NewFileName = Prefix ++ concuerror_nodes:get_node_number(node(), length(Nodes)) ++ "." ++ Suffix,
+        FixedRawOptions = [{output, NewFileName}|proplists:delete(output, RawOptions)],
+        Status =	  
+          case concuerror_options:finalize(FixedRawOptions) of
 	    {ok, Options, LogMsgs} ->
               ParallelOptions = AdditionalOptionts ++ Options,
               start(ParallelOptions, LogMsgs);
@@ -146,6 +156,18 @@ spawn_scheduler_wrappers([Node|Rest], StartFun) ->
 get_combined_status(SchedulerWrappers, Options) ->
   get_combined_status(SchedulerWrappers, Options, normal).
 
+get_combined_status_collect([]) ->
+  ok;
+get_combined_status_collect(SchedulerWrappers) ->
+  receive
+    {'DOWN', Ref, process, Pid, ExitStatus} ->
+      true = lists:member({Pid, Ref}, SchedulerWrappers),
+      Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
+      get_combined_status_collect(Rest)
+  end.
+
+
+
 get_combined_status([], _, Status) ->
   Status;
 get_combined_status(SchedulerWrappers, Options, Status) ->
@@ -157,6 +179,7 @@ get_combined_status(SchedulerWrappers, Options, Status) ->
         normal ->
           get_combined_status(Rest, Status);
         _ ->
+          get_combined_status_collect(Rest),
           ExitStatus
       end
   end.
