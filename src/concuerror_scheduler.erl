@@ -408,7 +408,7 @@ explore_scheduling_parallel(State) ->
     false ->
       case NewState#scheduler_state.scheduler_number of
         2 ->
-          io:fwrite("EXITSTATE ~n~p~n", [NewState]);
+          ok;%io:fwrite("EXITSTATE ~n~p~n", [NewState]);
         _ ->
           ok
       end,
