@@ -168,7 +168,8 @@
           replay_mode = pseudo         :: pseudo | actual,
           scheduler_number = undefined :: pos_integer() | undefined,
           start_time = undefined       :: undefined | integer(),
-          interleavings_explored = 0   :: integer()
+          interleavings_explored = 0   :: integer(),
+          error_found_parallel = false :: boolean()
           %% TODO check if replay_mode is needed 
          }).
 %-------------------------------------------------------------------------------
@@ -412,7 +413,12 @@ explore_scheduling_parallel(State) ->
           ok
       end,
       %% concuerror_callback:reset_processes(State#scheduler_state.processes),
-      Controller ! {done, self(), Duration, IE+1}
+      case NewState#scheduler_state.error_found_parallel of
+        false ->
+          Controller ! {done, self(), Duration, IE+1};
+        true ->
+          Controller ! {error_found, self(), Duration, IE+1}
+      end
   end,
   NewState.
 
@@ -607,7 +613,7 @@ log_trace(#scheduler_state{logger = Logger} = State) ->
   case Log =/= none andalso Log =/= sleep_set_block of
     true when not State#scheduler_state.keep_going ->
       ?unique(Logger, ?lerror, msg(stop_first_error), []),
-      State#scheduler_state{trace = []};
+      State#scheduler_state{trace = [], error_found_parallel = true};
     Other ->
       case Other of
         true ->

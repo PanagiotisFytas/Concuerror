@@ -50,6 +50,8 @@ initialize_controller(Nodes, Options) ->
       {budget_exceeded, InitialScheduler, NewFragment, D, IE} ->
         {[NewFragment], concuerror_scheduler:initialize_execution_tree(NewFragment), D, IE};
       {done, InitialScheduler, D, IE} ->
+        {[], empty, D, IE};
+      {error_found, InitialScheduler, D, IE} ->
         {[], empty, D, IE}
     end,
   InitUptimes = maps:from_list([{Pid, {SchedId, 0, 0}} || {Pid, SchedId} <- Schedulers]),
@@ -200,6 +202,30 @@ wait_scheduler_response(Status) ->
                         execution_tree = NewExecutionTree,
                         idle = NewIdle
                        });
+    {error_found, Scheduler, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      %% TODO I must figure out what do with this fragments that holds the
+      %% backtack (i.e the nodes that has been explored by that scheduler
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      %% TODO figure out what to do with the fragment of that scheduler,
+      %% its trace holds info about node ownership probably S.O.S.
+      %% Probably a master tree is needed that holds all this info
+      %% and gets cut down maybe by the #scheduler_state.done.
+      %% Most probably i will have to look at the backtrack of the
+      %% fragment and use this to update a master tree with the nodes
+      %% that have been explored by it 
+      NewIdle = [Scheduler|Idle],
+      NewExecutionTree =
+        ExecutionTree,%%concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
+      FinishedStatus = 
+        wait_for_schedulers_to_finish(Status#controller_status{
+                                        schedulers_uptime = NewUptimes,
+                                        busy = NewBusy,
+                                        execution_tree = NewExecutionTree,
+                                        idle = NewIdle
+                                       }),
+      controller_loop(FinishedStatus);
     {stop, Pid} ->
       SchedulingEnd = erlang:monotonic_time(),
       %% TODO : remove this check
@@ -218,6 +244,58 @@ wait_scheduler_response(Status) ->
       Pid ! done
   end.
 
+wait_for_schedulers_to_finish(#controller_status{busy = Busy} = Status)
+  when Busy =:= [] ->
+  Status#controller_status{idle_frontier = []};
+wait_for_schedulers_to_finish(Status) ->
+    #controller_status{
+     schedulers_uptime = Uptimes,
+     busy = Busy,
+     idle = Idle
+    } = Status,
+  receive
+    {claim_ownership, Scheduler, _Fragment, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      NewIdle = [Scheduler|Idle],
+      wait_for_schedulers_to_finish(Status#controller_status{
+                                      schedulers_uptime = NewUptimes,
+                                      busy = NewBusy,
+                                      idle = NewIdle
+                                     });
+    {budget_exceeded, Scheduler, _Fragment, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      NewIdle = [Scheduler|Idle],
+      wait_for_schedulers_to_finish(Status#controller_status{
+                                      schedulers_uptime = NewUptimes,
+                                      busy = NewBusy,
+                                      idle = NewIdle
+                                     });
+    {done, Scheduler, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      NewIdle = [Scheduler|Idle],
+      wait_for_schedulers_to_finish(Status#controller_status{
+                                      schedulers_uptime = NewUptimes,
+                                      busy = NewBusy,
+                                      idle = NewIdle
+                                     });
+    {error_found, Scheduler, Duration, IE} ->
+      NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
+      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      NewBusy = lists:keydelete(Scheduler, 1, Busy),
+      NewIdle = [Scheduler|Idle],
+      wait_for_schedulers_to_finish(Status#controller_status{
+                                      schedulers_uptime = NewUptimes,
+                                      busy = NewBusy,
+                                      idle = NewIdle
+                                     })
+  end.
+  
 is_non_local_process_alive(Pid) ->
   case rpc:pinfo(Pid, status) of
     undefined ->
