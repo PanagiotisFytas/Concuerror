@@ -126,7 +126,7 @@ start_parallel(RawOptions, OldOptions) ->
             Name ->
               Name
           end,
-        [Prefix, Suffix] = string:split(FileName, "."),
+        [Prefix, Suffix] = string:tokens(FileName, "."),
         NewFileName = Prefix ++ concuerror_nodes:get_node_number(node(), length(Nodes)) ++ "." ++ Suffix,
         FixedRawOptions = [{output, NewFileName}|proplists:delete(output, RawOptions)],
         Status =	  

@@ -64,8 +64,8 @@ path_to_ebin() ->
 -spec get_node_number(node(), integer()) -> unicode:charddata().
 
 get_node_number(Node, N) ->
-  [Name, _] = string:split(atom_to_list(Node), "@"),
-  [_, NumberList] = string:split(Name, "_"),
+  [Name, _] = string:tokens(atom_to_list(Node), "@"),
+  [_, NumberList] = string:tokens(Name, "_"),
   Number = list_to_integer(NumberList),
   integer_to_list(N - Number + 1).  
 
