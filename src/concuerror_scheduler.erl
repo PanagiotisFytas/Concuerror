@@ -2684,14 +2684,14 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
     try
       update_execution_tree_aux(lists:reverse(OldTrace), lists:reverse(Trace), ExecutionTree)
     catch
-      C:R:S ->
+      C:R   ->
         io:fwrite("OldTrace:~n", []),
         print_trace(lists:reverse(OldTrace)),
         io:fwrite("NewTrace~n", []),
         print_trace(lists:reverse(Trace)),
         io:fwrite("Tree~n", []),
         print_tree_relative(ExecutionTree, lists:reverse(OldTrace)),
-        exit({C,R,S})
+        exit({C,R  })
     end,
   %% print_trace(RevNewTrace),
   %% io:fwrite("~n"),
@@ -2700,7 +2700,7 @@ update_execution_tree(OldFragment, Fragment, ExecutionTree) ->
   EntriesLeft = BacktrackSize - BacktrackEntriesRemoved,
   try
     EntriesLeft = size_of_backtrack_transferable(lists:reverse(RevNewTrace))
-  catch _:_:_ ->
+  catch _:_   ->
       io:fwrite("Old:~n~p~nNew:~n~p~n", [lists:reverse(Trace), RevNewTrace]),
       io:fwrite("error~n~n"),
       receive
@@ -2911,7 +2911,7 @@ update_execution_tree_aux(
   %%     exit(error)
   %% end,
   try true = length(WuTInsertedChildren) >= length(Children)
-  catch _:_:_ ->
+  catch _:_ ->
       io:fwrite("Children: ~p~n WuTinsertedChildren: ~p~n",
                 [[Ex#execution_tree.event || Ex <- Children],
                  [Ex#execution_tree.event || Ex <- WuTInsertedChildren]]
@@ -2938,7 +2938,7 @@ update_execution_tree_aux(
         try 
           {P, [NC|S]} = split_active_children(NextActiveEvent, WuTInsertedChildren),
           {P, [NC|S]}
-        catch _E:_R:_S ->
+        catch _E:_R ->
             ActiveChildrenEv = [C#execution_tree.event  || C <- WuTInsertedChildren],
             io:fwrite("OldNextActiveEvent~p~nNextActiveEvent~p~nActiveChildren~p~n",
                       [OldNextActiveEvent, NextActiveEvent, ActiveChildrenEv]),
@@ -2949,7 +2949,7 @@ update_execution_tree_aux(
                      ]),
             io:fwrite("OldNextTraceStateAll:~p~nNextTraceStateAll:~p~n",
                       [OldNextTraceState, NextTraceState]),
-            exit({not_found, {_E,_R,_S}})
+            exit({not_found, {_E,_R}})
         end,
       %% TODO there is a bug here
       %% try split_active_children(NextActiveEvent, ActiveChildren)
@@ -3041,7 +3041,7 @@ update_execution_tree_aux(
         case split_children(NextActiveEvent, UpdatedChildren) of
           {Pref, [NextChild|Suff]} ->
             try [] = NextChild#execution_tree.children
-            catch _:_:_ ->
+            catch _:_ ->
                 receive
                 after 10000 ->
                     ok
@@ -3296,12 +3296,12 @@ update_execution_tree_done(Fragment, ExecutionTree) ->
         UpdatedTree
     end
   catch
-    C:R:S ->
+    C:R ->
       %% io:fwrite("TRACE~n",[]),
       %% print_trace(lists:reverse(Trace)),
       io:fwrite("TREE~n", []),
       print_tree_relative(ExecutionTree, lists:reverse(Trace)),
-      exit({C,R,S})
+      exit({C,R})
   end.
 
 update_execution_tree_done_aux([LastTraceState], ExecutionTree) ->
@@ -3503,7 +3503,7 @@ distribute_interleavings(State, FragmentsNeeded) ->
   {UpdatedTrace , NewFragmentTraces} =
     try
       distribute_interleavings_aux(lists:reverse(Trace),[], EntriesGiven, [], DPOR)
-    catch _:_:_ ->
+    catch _:_ ->
         io:fwrite("~p~nSizeBacktrack: ~w ~n", [lists:reverse(Trace),  BacktrackSize])
     end,
   NewFragments =

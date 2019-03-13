@@ -1016,7 +1016,7 @@ run_built_in(ets, new, 2, [Name, Options], Info) ->
             try
               ets:insert(ets_tid_to_ref, {T, Ref, TransferableArgs}),
               ets:insert(ets_ref_to_tid, {Ref, T, TransferableArgs})
-            catch C:RR:S -> exit({C,RR,S})
+            catch C:RR -> exit({C,RR})
             end
         end,
         true = ets:give_away(T, Scheduler, given_to_scheduler),
