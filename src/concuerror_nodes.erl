@@ -42,7 +42,7 @@ start_epmd(TriesLeft) ->
 hashed_name(Args) ->
   PathValue = file:get_cwd(),
   Hash = binary:decode_unsigned(erlang:md5(term_to_binary([PathValue|Args]))),
-  HashString = io_lib:format("~.16b",[Hash]),
+  HashString = ?format_hash(Hash),
   Name = "node" ++ HashString,
   list_to_atom(Name).
 

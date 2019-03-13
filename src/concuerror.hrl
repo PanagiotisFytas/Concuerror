@@ -189,6 +189,12 @@
 -define(time_unit, milli_seconds).
 -define(budget, 1000).
 
+-ifdef(BEFORE_OTP_20).
+-define(format_hash(Hash), lists:nth(1, io_lib:format("~.16b",[Hash]))).
+-else.
+-define(format_hash(Hash), io_lib:format("~.16b",[Hash])).
+-endif.
+
 -ifdef(BEFORE_OTP_17).
 -define(to_list(Dict), dict:to_list(Dict)).
 -define(from_list(Dict), dict:from_list(Dict)).
