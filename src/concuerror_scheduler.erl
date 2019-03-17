@@ -3829,6 +3829,11 @@ make_trace_state_transferable(TraceState) ->
 %% TODO add message_queue_transferable pattern
 make_actor_transferable('undefined') -> 'undefined';
 make_actor_transferable('none') -> 'none';
+make_actor_transferable({{Pid1, Pid2}, MessageEventQueue}) ->
+  TransferableList = 
+    [make_message_event_tranferable(Event) || Event <- queue:to_list(MessageEventQueue)],
+  Queue = queue:from_list(TransferableList),
+  {{pid_to_list(Pid1), pid_to_list(Pid2)}, Queue};
 make_actor_transferable({Pid1, Pid2}) ->
   {pid_to_list(Pid1), pid_to_list(Pid2)};
 make_actor_transferable(Pid) when is_pid(Pid)->
@@ -4134,13 +4139,18 @@ revert_trace_state(TraceState, Safe) ->
 %% TODO add message_queue_transferable pattern
 revert_actor('undefined') -> 'undefined';
 revert_actor('none') -> 'none';
+revert_actor({{PidList1, PidList2}, MessageEventQueue}) ->
+  RevertedList = 
+    [revert_message_event(Event) || Event <- queue:to_list(MessageEventQueue)],
+  Queue = queue:from_list(RevertedList),
+  {{list_to_pid(PidList1), list_to_pid(PidList2)}, Queue};
 revert_actor({PidList1, PidList2}) ->
   {list_to_pid(PidList1), list_to_pid(PidList2)};
 revert_actor(PidList) when is_list(PidList) ->
   list_to_pid(PidList);
 revert_actor(MessageEventQueue) ->
   RevertedList = 
-    [make_message_event_tranferable(Event) || Event <- queue:to_list(MessageEventQueue)],
+    [revert_message_event(Event) || Event <- queue:to_list(MessageEventQueue)],
   queue:from_list(RevertedList).
 
 
