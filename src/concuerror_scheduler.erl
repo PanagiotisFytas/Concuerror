@@ -578,11 +578,16 @@ explore(State) ->
       %% scheduler crashes
       case State#scheduler_state.parallel of
         true ->
-          State#scheduler_state.controller ! {done, self()};
+          IE = State#scheduler_state.interleavings_explored,
+          Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
+          State#scheduler_state.controller ! {error_found, self(), Duration, IE},
+          Ret = loop(State),
+          concuerror_callback:cleanup_processes(State#scheduler_state.processes),
+          State#scheduler_state.controller ! finished,
+          erlang:raise(Class, Reason, Stack);
         false ->
-         ok
-      end,
-      erlang:raise(Class, Reason, Stack)
+          erlang:raise(Class, Reason, Stack)
+      end
   end.
 
 %%------------------------------------------------------------------------------
