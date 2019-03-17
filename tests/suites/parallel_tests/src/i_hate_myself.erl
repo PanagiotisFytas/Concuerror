@@ -3,9 +3,9 @@
 -export([i_hate_myself/0]).
 -export([scenarios/0]).
 
--concuerror_options_forced([{parallel, true}]).
+-concuerror_options_forced([{parallel, true}, {number_of_schedulers, 1}]).
 
-scenarios() -> [{?MODULE, inf, dpor}].
+scenarios() -> [{?MODULE, inf, source}].
 
 i_hate_myself() ->
     Name = list_to_atom(lists:flatten(io_lib:format("~p",[make_ref()]))),

@@ -436,6 +436,6 @@ report_utilization([{_, {SchedulerId, RunningTime, InterleavingsExplored}}|Rest]
   report_utilization(Rest, TotalRunningTime).
 
 report_avg_time([], Sum, N) ->
-  io:fwrite("Total of ~B interleavings with average duration of ~.3fs", [N, Sum/1000/N]);
+  io:fwrite("Total of ~B interleavings with average duration of ~.3fs~n", [N, Sum/1000/N]);
 report_avg_time([{_, {_, Duration, IE}}|Rest], Sum, N) ->
   report_avg_time(Rest, Sum + Duration, N + IE).

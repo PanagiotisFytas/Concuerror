@@ -108,6 +108,7 @@ def runScenario(suite, name, modn, funn, preb, flags, files):
         os.remove(rslt)
     except OSError:
         pass
+    #maybeClearParallelFile(results, suite, rslt, txtname)
     # Run concuerror
     status = os.system(
         ("%s -kq --assume_racing false"
@@ -120,6 +121,7 @@ def runScenario(suite, name, modn, funn, preb, flags, files):
     # Compare the results
     has_crash = "crash" in flags
     orig = "%s/suites/%s/results/%s" % (dirname, suite, txtname)
+    maybeFixParallelOutput(results, suite, orig, rslt, txtname)
     equalRes = equalResults(suite, name, orig, rslt)
     if status != 512 and not has_crash:
         finished = True
@@ -136,7 +138,8 @@ def runScenario(suite, name, modn, funn, preb, flags, files):
                % (suitename, name,
                   "("+funn+",  "+preb_output+",  "+dpor_output+")"))
     if equalRes and finished:
-        # We don't need to keep the results file
+        # We don't need to keep the results fil
+        #maybeClearParallelFile(results, suite, txtname)
         try:
             os.remove(rslt)
         except:
@@ -159,6 +162,53 @@ def equalResults(suite, name, orig, rslt):
     else:
         return 0 == subprocess.call("bash differ %s %s" % (orig, rslt), shell=True)
 
+def maybeClearParallelFile(results, suite, rslt, txtname):
+    if suite != 'parallel_tests':
+        return
+    rslt_dir = "%s/%s/results/" % (results, suite)
+    files = os.popen('ls -d %s%s*' % (rslt_dir, txtname[:-4])).read().split('\n')
+    try:
+        files.remove(rslt)
+        files.remove('')
+    except:
+        pass
+    for f in files:
+        try:
+            os.remove(f)
+        except:
+            pass
+    
+def maybeFixParallelOutput(results, suite, orig, rslt, txtname):
+    if suite != 'parallel_tests':
+        return
+    rslt_dir = "%s/%s/results/" % (results, suite)
+    files = os.popen('ls -d %s%s*' % (rslt_dir, txtname[:-4])).read().split('\n')
+    #print("files", files)
+    try:
+        files.remove(rslt)
+        files.remove('')
+    except:
+        pass
+    #print("files", files)
+    rslts = [f for f in files]
+    OutputLines = [os.popen(("grep \"  Summary\" %s" % r)).read() for r in rslts]
+    #print("!!!!:" , OutputLines)
+    OrigLine = os.popen(("grep \"  Summary\" %s" % orig)).read()
+    #print("!!!!:" , OrigLine)
+    FixedOutputLines = [[int(s) for s in re.findall(r"[\w']+|[/]", line) if s.isdigit()] for line in OutputLines]
+    FixedOrigLine = [int(s) for s in re.findall(r"[\w']+|[/]", OrigLine) if s.isdigit()]
+    #print("!!!!!" + OrigLine)
+    total_interl = FixedOrigLine[2]
+    errors = 0
+    interleavings = 0
+    for line in FixedOutputLines:
+        errors += line[0]
+        interleavings += line[1]
+    FixedCompleteLine = '  Summary: %d errors, %d/%d interleavings explored' % (errors, interleavings, total_interl)
+    f = open(rslt, "w")
+    f.write(FixedCompleteLine)
+    f.close()
+    
 #---------------------------------------------------------------------
 # Main program
 

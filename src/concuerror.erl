@@ -106,7 +106,7 @@ get_scheduler_status(Reason, Logger) ->
 %%------------------------------------------------------------------------------
 
 start_parallel(RawOptions, OldOptions) ->
-  Nodes = concuerror_nodes:start(RawOptions),
+  Nodes = concuerror_nodes:start(OldOptions),
   % The the process_spawner starts and stops will be fixed when I make the
   % process_spawner a gen_server
   LoggerOptions = [{nodes, Nodes}|OldOptions],
@@ -154,7 +154,7 @@ spawn_scheduler_wrappers([Node|Rest], StartFun) ->
   [{Pid, Ref} | spawn_scheduler_wrappers(Rest, StartFun)].
 
 get_combined_status(SchedulerWrappers, Options) ->
-  get_combined_status(SchedulerWrappers, Options, normal).
+  get_combined_status(SchedulerWrappers, Options, ok).
 
 get_combined_status_collect([]) ->
   ok;
