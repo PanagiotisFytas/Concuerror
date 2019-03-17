@@ -5,7 +5,7 @@
 
 -concuerror_options_forced([{parallel, true}]).
 
-scenarios() -> [{?MODULE, inf, dpor}].
+scenarios() -> [{?MODULE, inf, source}].
 
 spawned_sender_crasher() ->
     Receiver = spawn(fun receive_two/0),
