@@ -73,7 +73,7 @@ initialize_spawner(Options) ->
       Fun = fun() -> initialize_slave_spawner(Master, MaxProcesses) end,
       Spawners = [spawn_link(Node, Fun) || Node <- Nodes],
       InitialPidList = get_initial_pid(Spawners, []),
-      [Spawner ! {start, InitialPidList} || Spawner <- Spawners],
+      lists:foreach(fun (SP) -> SP ! {start, InitialPidList} end, Spawners),
       wait_for_spawners(Spawners),
       State#spawner_state{
         slave_spawners = Spawners
@@ -104,11 +104,11 @@ get_initial_pid(Spawners, InitialPidLists) ->
 wait_for_spawners([]) ->
   ok;
 wait_for_spawners(Spawners) ->
-  receive {Spawner, ready} ->
+  receive
+    {Spawner, ready} ->
       true = lists:member(Spawner, Spawners),
       wait_for_spawners(lists:delete(Spawner, Spawners))
   end.
-
 
 initialize_slave_spawner(Master, MaxProcesses) ->
   Fun = fun() -> wait_activation() end,
@@ -175,9 +175,10 @@ master_loop(State) ->
           Caller ! {new_process, Process, self()},
           master_loop(State#spawner_state{allocated_processes = NewProcessMap});
         error ->
-          % key does not exist
-          [Spawner ! {self(), get_new_process, Symbol} || Spawner <- SlaveSpawners],
-          % try and allocate processes to nodes and symbols
+          %% key does not exist
+          lists:foreach(fun (SP) -> SP ! {self(), get_new_process, Symbol} end,
+                        SlaveSpawners),
+          %% try and allocate processes to nodes and symbols
           try receive_new_processes(ProcessMap, Symbol, length(SlaveSpawners)) of UpdatedProcessMap -> 
               {Process, NewProcessMap} = maps:take(Key, UpdatedProcessMap),
               unlink(Process),
@@ -191,8 +192,8 @@ master_loop(State) ->
           end
       end;
     {Pid, cleanup} ->
-      _ = [Spawner ! {self(), cleanup} || Spawner <- SlaveSpawners],
-      _ = [receive done -> ok end || _ <- SlaveSpawners],
+      lists:foreach(fun (SP) -> SP ! {self(), cleanup} end, SlaveSpawners),
+      lists:foreach(fun (__) -> receive done -> ok end end, SlaveSpawners),
       Pid ! done
   end.
 
