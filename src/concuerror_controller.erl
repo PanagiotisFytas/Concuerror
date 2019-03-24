@@ -21,7 +21,7 @@
 
 %%------------------------------------------------------------------------------
 
--spec start([node()], concuerror_options:options()) -> concuerror:exit_status().
+-spec start([node()], concuerror_options:options()) -> pid().
 
 start(Nodes, Options) ->
   Fun =
@@ -89,23 +89,25 @@ controller_loop(#controller_status{
   SchedulingEnd = erlang:monotonic_time(),
   %% TODO : remove this check
   %% empty = Status#controller_status.execution_tree, %% this does not hold true
-  case Status#controller_status.execution_tree =/= empty of
-    true ->
-      ok;%concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
-    false ->
-      ok
-  end,
+  %% case Status#controller_status.execution_tree =/= empty of
+  %%   true ->
+  %%     ok;%concuerror_scheduler:print_tree("", Status#controller_status.execution_tree);
+  %%   false ->
+  %%     ok
+  %% end,
   #controller_status{
      schedulers_uptime = _Uptimes,
      idle = Idle,
      scheduling_start = SchedulingStart
     } = Status,
-  [Scheduler ! finish || Scheduler <- Idle],
-  [receive finished -> ok 
-   after 10000 ->
-       exit(sched_responed_timeout)
-   end
-   || _ <- Idle],
+  lists:foreach(fun(Scheduler) -> Scheduler ! finish end, Idle),
+  lists:foreach(fun(_) ->
+                    receive finished -> ok
+                    after 10000 ->
+                        exit(sched_responed_timeout)
+                    end
+                end,
+                Idle),
   receive
     {stop, Pid} ->
       %%SchedulingEnd = erlang:monotonic_time(),
@@ -138,7 +140,13 @@ wait_scheduler_response(Status) ->
   receive
     {claim_ownership, Scheduler, Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
+      {Scheduler, OldFragment} =
+        case lists:keyfind(Scheduler, 1, Busy) of %% maybe use this as well
+          false ->
+            exit(impossible);
+          {S, F} ->
+            {S, F}
+        end,
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       {NewIdleFragment, NewExecutionTree} =
@@ -160,7 +168,13 @@ wait_scheduler_response(Status) ->
                        });
     {budget_exceeded, Scheduler, Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, OldFragment} = 
+        case lists:keyfind(Scheduler, 1, Busy) of
+          false ->
+            exit(impossible);
+          {S, F} ->
+            {S, F}
+        end,
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       {NewIdleFragment, NewExecutionTree} =
@@ -182,7 +196,13 @@ wait_scheduler_response(Status) ->
                        });
     {done, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, _CompletedFragment} = 
+        case lists:keyfind(Scheduler, 1, Busy) of
+          false ->
+            exit(impossible);
+          {S, F} ->
+            {S, F}
+        end,
       %% TODO I must figure out what do with this fragments that holds the
       %% backtack (i.e the nodes that has been explored by that scheduler
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
@@ -204,7 +224,13 @@ wait_scheduler_response(Status) ->
                        });
     {error_found, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, _CompletedFragment} = 
+        case lists:keyfind(Scheduler, 1, Busy) of
+          false ->
+            exit(impossible);
+          {S, F} ->
+            {S, F}
+        end,
       %% TODO I must figure out what do with this fragments that holds the
       %% backtack (i.e the nodes that has been explored by that scheduler
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
@@ -236,10 +262,10 @@ wait_scheduler_response(Status) ->
          busy = Busy,
          scheduling_start = SchedulingStart
         } = Status,
-      BusyPids = [P || {P, _} <- Busy],
-      Schedulers =[Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
-      [Scheduler ! finish || Scheduler <- Schedulers],
-      [receive finished -> ok end || _ <- Schedulers],
+      BusyPids = lists:map(fun({P, _}) -> P end, Busy),
+      Schedulers = [Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
+      lists:foreach(fun(Scheduler) -> Scheduler ! finish end, Schedulers),
+      lists:foreach(fun(_) -> receive finished -> ok end end, Schedulers),
       report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
       Pid ! done
   end.
