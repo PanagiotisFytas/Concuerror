@@ -182,7 +182,7 @@ wait_scheduler_response(Status) ->
                        });
     {done, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
       %% TODO I must figure out what do with this fragments that holds the
       %% backtack (i.e the nodes that has been explored by that scheduler
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
@@ -204,7 +204,7 @@ wait_scheduler_response(Status) ->
                        });
     {error_found, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
       %% TODO I must figure out what do with this fragments that holds the
       %% backtack (i.e the nodes that has been explored by that scheduler
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
@@ -236,8 +236,8 @@ wait_scheduler_response(Status) ->
          busy = Busy,
          scheduling_start = SchedulingStart
         } = Status,
-      BusyPids = [Pid || {Pid, _} <- Busy],
-      Schedulers = [Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
+      BusyPids = [P || {P, _} <- Busy],
+      Schedulers =[Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
       [Scheduler ! finish || Scheduler <- Schedulers],
       [receive finished -> ok end || _ <- Schedulers],
       report_stats_parallel(Status, SchedulingStart, SchedulingEnd),
@@ -256,7 +256,7 @@ wait_for_schedulers_to_finish(Status) ->
   receive
     {claim_ownership, Scheduler, _Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
+      {Scheduler, _OldFragment} = lists:keyfind(Scheduler, 1, Busy), %% maybe use this as well
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       wait_for_schedulers_to_finish(Status#controller_status{
@@ -266,7 +266,7 @@ wait_for_schedulers_to_finish(Status) ->
                                      });
     {budget_exceeded, Scheduler, _Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, OldFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, _OldFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       wait_for_schedulers_to_finish(Status#controller_status{
@@ -276,7 +276,7 @@ wait_for_schedulers_to_finish(Status) ->
                                      });
     {done, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       wait_for_schedulers_to_finish(Status#controller_status{
@@ -286,7 +286,7 @@ wait_for_schedulers_to_finish(Status) ->
                                      });
     {error_found, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
-      {Scheduler, CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
+      {Scheduler, _CompletedFragment} = lists:keyfind(Scheduler, 1, Busy),
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       wait_for_schedulers_to_finish(Status#controller_status{
@@ -308,10 +308,10 @@ is_non_local_process_alive(Pid) ->
       true
   end.
 
-start_schedulers([], NewIdle, NewBusy) -> {NewIdle, NewBusy};
-start_schedulers([State|RestStates], [Scheduler|RestSchedulers], Busy) ->
-  Scheduler ! {explore, State},
-  start_schedulers(RestStates, RestSchedulers, [Scheduler|Busy]).
+%% start_schedulers([], NewIdle, NewBusy) -> {NewIdle, NewBusy};
+%% start_schedulers([State|RestStates], [Scheduler|RestSchedulers], Busy) ->
+%%   Scheduler ! {explore, State},
+%%   start_schedulers(RestStates, RestSchedulers, [Scheduler|Busy]).
 
 assign_work(#controller_status{
                idle = Idle,
@@ -373,13 +373,13 @@ stop(Controller) ->
 
 %%------------------------------------------------------------------------------
 
-update_scheduler_started(Scheduler, Uptimes) ->
-  PeriodStart = erlang:monotonic_time(),
-  Fun =
-    fun({SchedId, undefined, Acc}) ->
-        {SchedId, PeriodStart, Acc}
-    end,
-  maps:update_with(Scheduler, Fun, Uptimes).
+%% update_scheduler_started(Scheduler, Uptimes) ->
+%%   PeriodStart = erlang:monotonic_time(),
+%%   Fun =
+%%     fun({SchedId, undefined, Acc}) ->
+%%         {SchedId, PeriodStart, Acc}
+%%     end,
+%%   maps:update_with(Scheduler, Fun, Uptimes).
 
 
 update_scheduler_stopped(Scheduler, Uptimes, Duration, IE) ->

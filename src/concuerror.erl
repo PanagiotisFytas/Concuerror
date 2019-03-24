@@ -139,7 +139,7 @@ start_parallel(RawOptions, OldOptions) ->
 	  exit(Status)
     end,
   SchedulerWrappers = spawn_scheduler_wrappers(Nodes, StartFun),
-  CombinedStatus = get_combined_status_logger(SchedulerWrappers, LoggerOptions),
+  CombinedStatus = get_combined_status_logger(SchedulerWrappers),
   ExitStatus = CombinedStatus, %% concuerror_logger:stop(LoggerWrapper, CombinedStatus),
   ok = concuerror_controller:stop(Controller),
   concuerror_process_spawner:stop(ProcessSpawner),
@@ -153,14 +153,11 @@ spawn_scheduler_wrappers([Node|Rest], StartFun) ->
   Ref = monitor(process, Pid),
   [{Pid, Ref} | spawn_scheduler_wrappers(Rest, StartFun)].
 
-get_combined_status(SchedulerWrappers, Options) ->
-  get_combined_status(SchedulerWrappers, Options, ok).
-
 get_combined_status_collect([]) ->
   ok;
 get_combined_status_collect(SchedulerWrappers) ->
   receive
-    {'DOWN', Ref, process, Pid, ExitStatus} ->
+    {'DOWN', Ref, process, Pid, _ExitStatus} ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
       Rest = lists:delete({Pid, Ref}, SchedulerWrappers),
       get_combined_status_collect(Rest)
@@ -168,9 +165,9 @@ get_combined_status_collect(SchedulerWrappers) ->
 
 
 
-get_combined_status([], _, Status) ->
+get_combined_status([], Status) ->
   Status;
-get_combined_status(SchedulerWrappers, Options, Status) ->
+get_combined_status(SchedulerWrappers, Status) ->
   receive
     {'DOWN', Ref, process, Pid, ExitStatus} ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
@@ -184,12 +181,12 @@ get_combined_status(SchedulerWrappers, Options, Status) ->
       end
   end.
 
-get_combined_status_logger(SchedulerWrappers, Options) ->
-  get_combined_status_logger(SchedulerWrappers, Options, normal).
+get_combined_status_logger(SchedulerWrappers) ->
+  get_combined_status_logger(SchedulerWrappers, normal).
 
-get_combined_status_logger([], _, Status) ->
+get_combined_status_logger([], Status) ->
   Status;
-get_combined_status_logger(SchedulerWrappers, Options, Status) ->
+get_combined_status_logger(SchedulerWrappers, Status) ->
   receive
     {'DOWN', Ref, process, Pid, ExitStatus} ->
       true = lists:member({Pid, Ref}, SchedulerWrappers),
