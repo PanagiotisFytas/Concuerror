@@ -1046,8 +1046,8 @@ run_built_in(ets, new, 2, [Name, Options], Info) ->
                 R;
               true ->
                 %% Actual replay
-                CurrentTid = ets:lookup(EtsTables, tid, 2),
-                ets:insert(EtsTables, tid, max(R, CurrentTid)),
+                CurrentTid = ets:lookup_element(EtsTables, tid, 2),
+                ets:update_element(EtsTables, tid, {2, max(R, CurrentTid)}),
                 R
             end;
           %% New event...
@@ -1835,8 +1835,8 @@ link_monitor_handlers(Handler, LinksOrMonitors) ->
 set_up_parallel_ets(false) ->
   ok;
 set_up_parallel_ets(true) ->
-  ets:new(ets_ref_to_tid, [public, named_table]),
-  ets:new(ets_tid_to_ref, [public, named_table]),
+  _ = ets:new(ets_ref_to_tid, [public, named_table]),
+  _ = ets:new(ets_tid_to_ref, [public, named_table]),
   ok.
 
 check_ets_access_rights(Name, Op, Info) ->
