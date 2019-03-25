@@ -61,7 +61,7 @@ path_to_ebin() ->
   ModulePath = code:which(?MODULE),
   filename:dirname(ModulePath).
 
--spec get_node_number(node(), integer()) -> unicode:charddata().
+-spec get_node_number(node(), integer()) -> unicode:chardata().
 
 get_node_number(Node, N) ->
   [Name, _] = string:tokens(atom_to_list(Node), "@"),
