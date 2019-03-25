@@ -9,7 +9,7 @@
 -record(controller_status, {
                             fragmentation_val    :: non_neg_integer(),
                             execution_tree       :: concuerror_scheduler:execution_tree(),
-                            schedulers_uptime    :: maps:map(),
+                            schedulers_uptime    :: map(),
                             busy                 :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
                             idle                 :: [pid()],
                             idle_frontier        :: [concuerror_scheduler:reduced_scheduler_state()],
@@ -339,11 +339,9 @@ is_non_local_process_alive(Pid) ->
 %%   Scheduler ! {explore, State},
 %%   start_schedulers(RestStates, RestSchedulers, [Scheduler|Busy]).
 
-assign_work(#controller_status{
-               idle = Idle,
-               idle_frontier = IdleFrontier
-              } = Status)
-  when Idle =:= [] orelse IdleFrontier =:= []->
+assign_work(#controller_status{idle = []} = Status) ->
+  Status;
+assign_work(#controller_status{idle_frontier = []} = Status) ->
   Status;
 assign_work(Status) ->
   #controller_status{
@@ -430,7 +428,7 @@ report_stats_parallel(Status, Start, End) ->
   io:fwrite("Budget Exceeded: ~B~nOwnership Claims: ~B~n", [BE, OC]), 
   report_stats(Uptimes, Start, End).
 
--spec report_stats(maps:map(), integer(), integer()) -> ok.
+-spec report_stats(map(), integer(), integer()) -> ok.
 
 report_stats(Uptimes, Start, End) ->
   %% TODO modify this to be reported through the Logger

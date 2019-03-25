@@ -85,11 +85,11 @@ timediff(After, Before) ->
 
 -record(wrapper_state, {
           current_job      :: none | reference(),
-          calls_to_logger  :: maps:map(),
+          calls_to_logger  :: map(),
 %%          controller       :: pid(),
           jobs             :: queue:queue(),
           logger           :: pid(),
-          schedulers       :: maps:map()
+          schedulers       :: map()
          }).
 
 %%------------------------------------------------------------------------------
