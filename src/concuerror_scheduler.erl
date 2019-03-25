@@ -212,18 +212,18 @@
           wakeup_tree      = []         :: event_tree_transferable()
          }).
 
-%% -type trace_state_transferable() :: #trace_state_transferable{}.
+-type trace_state_transferable() :: #trace_state_transferable{}.
 
 -record(reduced_scheduler_state, {
           backtrack_size  :: pos_integer(),
           dpor            :: concuerror_options:dpor(),
           interleaving_id :: interleaving_id(),
-          last_scheduled  :: pid(),
+          last_scheduled  :: string(),
           need_to_replay  :: boolean(),
           origin          :: interleaving_id(),
           processes_ets_tables :: [atom()],
           safe            :: boolean(),
-          trace           :: [trace_state()]
+          trace           :: [trace_state_transferable()]
          }).
 
 -type reduced_scheduler_state() :: #reduced_scheduler_state{}.
@@ -383,7 +383,7 @@ explore_scheduling_parallel(State) ->
   {HasMore, NewState} = has_more_to_explore(RacesDetectedState),
   Controller = NewState#scheduler_state.controller,
   Duration = erlang:monotonic_time(?time_unit) - State#scheduler_state.start_time,
-  case HasMore of
+  _ = case HasMore of
     true ->
       %% TODO add termination when testing something that I do not own
       %% concuerror_callback:reset_processes(State#scheduler_state.processes),
@@ -840,8 +840,6 @@ get_next_event(Event, MaybeNeedsReplayState) ->
                   end,
                 Reason = {replay_mismatch, I, Event, New, PrintDepth},
                 io:fwrite("Event:~w~nNew:~w~n", [Event, New]),
-                exit(fok),
-                erlang:raise(fok),
                 ?crash(Reason)
             end;
           false ->
