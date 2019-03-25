@@ -2282,7 +2282,7 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I} = _|Rest], State) -
 %%TODO add more event_info types
 
 logically_equal(Event1, Event2) ->
-  logically_equal(#scheduler_state{parallel = true}, Event1, Event2).
+  logically_equal_aux(Event1, Event2).
 
 logically_equal(#scheduler_state{parallel = false}, _, _) ->
   false;
