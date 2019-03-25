@@ -179,7 +179,7 @@
 -type message_event_queue_transferable() :: queue().
 -else.
 -type vector_clock_transferable()        :: [{actor_transferable(), index()}].
--type clock_map_transferable()           :: [{actor_transferable(), vector_clock_transferable()}].
+-type clock_map_transferable()           :: [{actor_transferable() | 'state', vector_clock_transferable() | 'independent'}].
 -type message_event_queue_transferable() :: queue:queue(#message_event_transferable{}).
 -endif.
 
