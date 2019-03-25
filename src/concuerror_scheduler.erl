@@ -2284,8 +2284,7 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I} = _|Rest], State) -
 logically_equal(Event1, Event2) ->
   logically_equal(#scheduler_state{parallel = true}, Event1, Event2).
 
-logically_equal(#scheduler_state{parallel = Parallel}, _, _)
-  when Parallel =:= false ->
+logically_equal(#scheduler_state{parallel = false}, _, _) ->
   false;
 logically_equal(_, Event, NewEvent) ->
   %% #event{event_info = EventInfo} = Event,
@@ -2297,8 +2296,7 @@ logically_equal(_, Event, NewEvent) ->
 logically_equal_aux([], []) ->
   true;
 logically_equal_aux([H|T], [NewH|NewT]) ->
-  logically_equal_aux(H, NewH)
-    andalso logically_equal_aux(T, NewT);
+  logically_equal_aux(H, NewH) andalso logically_equal_aux(T, NewT);
 logically_equal_aux(#builtin_event{} = EventInfo, #builtin_event{} = NewEventInfo) ->
   #builtin_event{
      %% actor = Actor,
@@ -3780,7 +3778,7 @@ make_state_transferable(State) ->
      origin = Origin,
      trace = Trace
     } = State,
-  ets:new(ets_transferable, [named_table, public]),
+  ets_transferable = ets:new(ets_transferable, [named_table, public]),
   TransferableTrace =
     [make_trace_state_transferable(TraceState) || TraceState <- Trace],
   TransferableState =
