@@ -365,7 +365,7 @@
           last_status = running     :: running | waiting,
           exit_by_signal = false    :: boolean(),
           links = []                :: [pid()] | [string()],
-          monitors = []             :: [{reference(), pid()}] | {reference(), string()}, %% TODO figure out what to do here
+          monitors = []             :: [{reference(), pid()}] | [{reference(), string()}], %% TODO figure out what to do here
           name = ?process_name_none :: ?process_name_none | atom(),
           reason = normal           :: term(),
           stacktrace = []           :: [term()],

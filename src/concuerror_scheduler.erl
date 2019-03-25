@@ -2497,7 +2497,7 @@ bound_reached(Logger) ->
 %%------------------------------------------------------------------------------
 
 -spec initialize_execution_tree(reduced_scheduler_state()) ->
-                                 execution_tree().
+                                 #execution_tree{}.
 
 %% TODO modify in case I need to add sleep sets here
 initialize_execution_tree(#reduced_scheduler_state{trace = Trace} = _Fragment) ->
@@ -2584,7 +2584,7 @@ split_children(ActiveEvent, Children) ->
   lists:splitwith(Pred, Children).
 
 %%------------------------------------------------------------------------------
--spec print_tree(term(), term()) -> term().
+-spec print_tree([string()], #execution_tree{}) -> [[[any()]]].
 
 print_tree(Prefix, ExecTree) ->
   #execution_tree{
