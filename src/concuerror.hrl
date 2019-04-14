@@ -191,8 +191,10 @@
 
 -ifdef(BEFORE_OTP_20).
 -define(format_hash(Hash), lists:nth(1, io_lib:format("~.16b",[Hash]))).
+-define(is_tid(MaybeTid), is_integer(MaybeTid)).
 -else.
 -define(format_hash(Hash), io_lib:format("~.16b",[Hash])).
+-define(is_tid(MaybeTid), is_reference(MaybeTid)).
 -endif.
 
 -ifdef(BEFORE_OTP_17).

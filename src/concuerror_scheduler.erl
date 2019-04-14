@@ -4027,7 +4027,7 @@ maybe_new_extra_transferable(
      extra = Extra,
      mfargs = {ets, _, _}
     } = _E) 
-  when is_reference(Extra) ->
+  when ?is_tid(Extra) ->
   %%  exit({_E, ets:tab2list(ets_tid_to_ref)}),
   [{Extra, Ref, TransferableArgs}] = ets:lookup(ets_tid_to_ref, Extra),
   {Ref, TransferableArgs};
