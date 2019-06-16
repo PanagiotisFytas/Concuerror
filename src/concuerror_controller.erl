@@ -16,7 +16,8 @@
                             scheduling_start     :: integer(),
                             budget_exceeded = 0  :: integer(),
                             ownership_claims = 0 :: integer(),
-                            budget               :: integer()
+                            budget               :: integer(),
+                            dpor                 :: source | optimal
                            }).
 
 %%------------------------------------------------------------------------------
@@ -68,8 +69,10 @@ initialize_controller(Nodes, Options) ->
        idle = Idle,
        idle_frontier = IdleFrontier,
        scheduling_start = SchedulingStart,
-       budget = ?opt(budget, Options)
+       budget = ?opt(budget, Options),
+       dpor = ?opt(dpor, Options)
       },
+  set_up_parallel_ets(),
   controller_loop(InitialStatus).
 
 get_schedulers(0, _) -> [];
@@ -135,7 +138,8 @@ wait_scheduler_response(Status) ->
      idle = Idle,
      idle_frontier = IdleFrontier,
      budget_exceeded = BE,
-     ownership_claims = OC
+     ownership_claims = OC,
+     dpor = DPOR
     } = Status,
   receive
     {claim_ownership, Scheduler, Fragment, Duration, IE} ->
@@ -150,7 +154,12 @@ wait_scheduler_response(Status) ->
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       {NewIdleFragment, NewExecutionTree} =
-        concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree),
+        case DPOR of
+          source ->
+            concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree);
+          optimal ->
+            concuerror_scheduler:update_execution_tree_opt(Fragment, ExecutionTree)
+        end,
       NewIdleFrontier =
         case NewIdleFragment =:= fragment_finished of
           false ->
@@ -178,7 +187,12 @@ wait_scheduler_response(Status) ->
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
       {NewIdleFragment, NewExecutionTree} =
-        concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree),
+        case DPOR of
+          source ->
+            concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree);
+          optimal ->
+            concuerror_scheduler:update_execution_tree_opt(Fragment, ExecutionTree)
+        end,
       NewIdleFrontier =
         case NewIdleFragment =:= fragment_finished of
           false ->
@@ -361,6 +375,11 @@ assign_work(Status) ->
       idle_frontier = RestIdleFrontier
      },
   assign_work(UpdatedStatus).
+
+set_up_parallel_ets() ->
+  _ = ets:new(ets_ref_to_tid, [public, named_table]),
+  _ = ets:new(ets_tid_to_ref, [public, named_table]),
+  ok.
   
 %%------------------------------------------------------------------------------
 
