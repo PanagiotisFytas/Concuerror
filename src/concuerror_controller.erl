@@ -127,13 +127,6 @@ controller_loop(Status) ->
      idle_frontier = IdleFrontier
     } = Status,
   NewIdleFrontier = partition(IdleFrontier, FragmentationVal - length(Busy)),
-  %% io:fwrite("~w~n", [length(NewIdleFrontier)]),
-  %% case length(NewIdleFrontier) of
-  %%   3 ->
-  %%     io:fwrite("~p~n", [NewIdleFrontier]);
-  %%   _ ->
-  %%     ok
-  %% end,
   NewStatus = assign_work(Status#controller_status{idle_frontier = NewIdleFrontier}),
   wait_scheduler_response(NewStatus).
 
@@ -160,6 +153,13 @@ wait_scheduler_response(Status) ->
         end,
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
+      WorkReassignedStatus = assign_work(Status#controller_status{
+                                           schedulers_uptime = NewUptimes,
+                                           busy = NewBusy,
+                                           idle = NewIdle,
+                                           ownership_claims = OC + 1
+                                          }),
+      UpdatedIdleFrontier = WorkReassignedStatus#controller_status.idle_frontier,
       {NewIdleFragment, NewExecutionTree} =
         case DPOR of
           source ->
@@ -170,17 +170,13 @@ wait_scheduler_response(Status) ->
       NewIdleFrontier =
         case NewIdleFragment =:= fragment_finished of
           false ->
-            [NewIdleFragment|IdleFrontier];
+            [NewIdleFragment|UpdatedIdleFrontier];
           true ->
-            IdleFrontier
+            UpdatedIdleFrontier
         end,
-      controller_loop(Status#controller_status{
-                        schedulers_uptime = NewUptimes,
-                        busy = NewBusy,
+      controller_loop(WorkReassignedStatus#controller_status{
                         execution_tree = NewExecutionTree,
-                        idle = NewIdle,
-                        idle_frontier = NewIdleFrontier,
-                        ownership_claims = OC + 1
+                        idle_frontier = NewIdleFrontier
                        });
     {budget_exceeded, Scheduler, Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
@@ -193,6 +189,13 @@ wait_scheduler_response(Status) ->
         end,
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
+      WorkReassignedStatus = assign_work(Status#controller_status{
+                                           schedulers_uptime = NewUptimes,
+                                           busy = NewBusy,
+                                           idle = NewIdle,
+                                           budget_exceeded = BE + 1
+                                          }),
+      UpdatedIdleFrontier = WorkReassignedStatus#controller_status.idle_frontier,
       {NewIdleFragment, NewExecutionTree} =
         case DPOR of
           source ->
@@ -203,17 +206,13 @@ wait_scheduler_response(Status) ->
       NewIdleFrontier =
         case NewIdleFragment =:= fragment_finished of
           false ->
-            [NewIdleFragment|IdleFrontier];
+            [NewIdleFragment|UpdatedIdleFrontier];
           true ->
-            IdleFrontier
+            UpdatedIdleFrontier
         end,
-      controller_loop(Status#controller_status{
-                        schedulers_uptime = NewUptimes,
-                        busy = NewBusy,
+      controller_loop(WorkReassignedStatus#controller_status{
                         execution_tree = NewExecutionTree,
-                        idle = NewIdle,
-                        idle_frontier = NewIdleFrontier,
-                        budget_exceeded = BE + 1
+                        idle_frontier = NewIdleFrontier
                        });
     {done, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
