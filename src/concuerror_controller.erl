@@ -59,10 +59,18 @@ initialize_controller(Nodes, Options) ->
   NewUptimes = update_scheduler_stopped(InitialScheduler, InitUptimes, Duration, InterleavingsExplored),
   Busy = [],
   Idle = SchedulerPids,
+  OptFragmentationValue = ?opt(fragmentation_value, Options),
+  NumberOfSchedulers = ?opt(number_of_schedulers, Options),
+  FragmentationValue =
+    case OptFragmentationValue < NumberOfSchedulers of
+      true ->
+        2 * NumberOfSchedulers;
+      false ->
+        OptFragmentationValue
+    end,
   InitialStatus =
     #controller_status{
-       fragmentation_val =
-         max(?opt(fragmentation_value, Options),?opt(number_of_schedulers, Options)),
+       fragmentation_val = FragmentationValue,
        schedulers_uptime = NewUptimes,
        busy = Busy,
        execution_tree = ExecutionTree,

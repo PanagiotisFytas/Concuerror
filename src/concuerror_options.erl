@@ -163,7 +163,7 @@ options() ->
   ,{budget, [experimental], undefined, {integer, 10000},
     "The budget of each scheduler",
     nolong}
-  ,{fragmentation_value, [experimental], undefined, {integer, 4},
+  ,{fragmentation_value, [experimental], undefined, {integer, 0},
     "How many active fragments on the state space frontier",
     nolong}
   ,{optimal, [por], undefined, boolean,

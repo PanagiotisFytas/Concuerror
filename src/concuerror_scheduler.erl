@@ -609,9 +609,9 @@ size_of_backtrack_optimal_aux([BacktrackEntry|Rest]) ->
           1
       end
     catch
-      C:R:S ->
+      C:R ->
         io:fwrite("!!!!~n~p~n????", [BacktrackEntry]),
-        erlang:raise({C,R,S})
+        erlang:raise(C, R, erlang:get_stacktrace())
           
     end,
   Count
@@ -3521,12 +3521,12 @@ update_execution_tree_opt(Fragment, ExecutionTree) ->
     try
       update_execution_tree_opt_aux(lists:reverse(Trace), ExecutionTree)
     catch
-      C:R:S ->
+      C:R ->
         io:fwrite("Trace~n", []),
         print_trace(lists:reverse(Trace)),
         %% io:fwrite("Tree~n", []),
         %% print_tree_relative(ExecutionTree, lists:reverse(Trace)),
-        erlang:raise({C,R,S})
+        erlang:raise(C, R, erlang:get_stacktrace())
     end,
   %% print_trace(RevNewTrace),
   %% io:fwrite("~n"),
@@ -3564,7 +3564,7 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
      done = NextDone,
      sleep_set = SleepSet,
      wakeup_tree = NextWuT,
-     unique_id = {Origin, _} 
+     unique_id = {_Origin, _} 
     } = NextTraceState,
   [Event|_] = Done,
   [NextEvent|NextFinished] = NextDone,
@@ -3605,9 +3605,9 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
         try
           true = NextTraceState#trace_state_transferable.ownership
         catch
-          C:R:S ->
+          C:R ->
             io:fwrite("~p~n", [NextEvent]),
-            erlang:raise({C,R,S})
+            erlang:raise(C, R, erlang:get_stacktrace())
         end,
         WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, []),
         NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
@@ -3722,7 +3722,7 @@ insert_wut_into_children_opt_aux(
      event = Event,
      wakeup_tree = WuT,
      origin = N
-    } = Entry,
+    } = _Entry,
   Children
  ) ->
   case split_children_on_actor(Event, Children) of
@@ -3749,7 +3749,7 @@ insert_new_trace([TraceState], ExecutionTree) ->
   %%exit(impossible6),
   #trace_state_transferable{
      done = Done,
-     unique_id = {N, _}
+     unique_id = {_N, _}
     } = TraceState,
   #execution_tree{
      event = Event2,
@@ -3835,7 +3835,7 @@ insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
      done = NextDone
     } = NextTraceState,
   [Event|_] = Done,
-  [NextEvent|NextFinished] = NextDone,
+  [_NextEvent|NextFinished] = NextDone,
   %% This could not be the case,
   %% there could be some not_owned wut left from the parent I think
   %% {OwnedWuT, [], []} = split_wut(NextWuT),
@@ -4195,9 +4195,9 @@ distribute_interleavings(State, FragmentsNeeded) ->
   {UpdatedTrace , NewFragmentTraces} =
     try
       distribute_interleavings_aux(lists:reverse(Trace),[], EntriesGiven, [], DPOR)
-    catch C:R:S ->
+    catch C:R ->
         io:fwrite("~p~nSizeBacktrack: ~w ~n", [lists:reverse(Trace),  BacktrackSize]),
-        erlang:raise({C,R,S})
+        erlang:raise(C, R, erlang:get_stacktrace())
     end,
   NewFragments =
     [State#reduced_scheduler_state{
