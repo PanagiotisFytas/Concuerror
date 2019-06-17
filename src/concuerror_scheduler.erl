@@ -3548,6 +3548,7 @@ update_execution_tree_opt(Fragment, ExecutionTree) ->
   %% TODO add check here in case all backtrack entries are removed
   {OwnershipFixedFragment, NewExecutionTree}.
 
+
 update_execution_tree_opt_aux([TraceState], ExecutionTree) ->
   {ExecutionTree, [TraceState]};
 update_execution_tree_opt_aux(
@@ -3566,7 +3567,7 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
      unique_id = {Origin, _} 
     } = NextTraceState,
   [Event|_] = Done,
-  [NextEvent|_] = NextDone,
+  [NextEvent|NextFinished] = NextDone,
   #execution_tree{
      event = Event2,
      children = Children
@@ -3605,12 +3606,13 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
           true = NextTraceState#trace_state_transferable.ownership
         catch
           C:R:S ->
-            io:fwrite("~p~n", NextEvent),
+            io:fwrite("~p~n", [NextEvent]),
             erlang:raise({C,R,S})
         end,
         WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, []),
+        NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
-        {Children ++ [NewChild|WuTInsertedChildren], [NextTraceState|Rest]}
+        {Children ++ NextFinishedChildren ++ [NewChild|WuTInsertedChildren], [NextTraceState|Rest]}
     end,
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
@@ -3766,7 +3768,7 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
      ownership = NextOwnership
     } = NextTraceState,
   [Event|_] = Done,
-  [NextEvent|_] = NextDone,
+  [NextEvent|NextFinished] = NextDone,
   #execution_tree{
      event = Event2,
      children = Children
@@ -3785,8 +3787,9 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
         WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, []),
         % TODO remove this
         %false = have_duplicates(WuTInsertedChildren),
+        NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
-        Children ++ [NewChild] ++ WuTInsertedChildren
+        Children ++ NextFinishedChildren ++ [NewChild] ++ WuTInsertedChildren
     end,
   %% case have_duplicates(TraceInsertedChildren) of
   %%   true ->
@@ -3828,22 +3831,24 @@ insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
      unique_id = {N, _}
     } = TraceState,
   #trace_state_transferable{
-     wakeup_tree = NextWuT
+     wakeup_tree = NextWuT,
+     done = NextDone
     } = NextTraceState,
-  [Event|FinishedChildren] = Done,
+  [Event|_] = Done,
+  [NextEvent|NextFinished] = NextDone,
   %% This could not be the case,
   %% there could be some not_owned wut left from the parent I think
   %% {OwnedWuT, [], []} = split_wut(NextWuT),
   %% when a disputed wut becomes owned new children must be added
   NewChild = insert_completely_new_trace([NextTraceState|Rest]),
-  FinishedChildrenTree = [#execution_tree{event = Ev} || Ev <- FinishedChildren],
+  NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
   NewExecutionTree =
     #execution_tree{
        event = Event,
        origin = N,
        %% TODO maybe need to add done in children !!!
        children =
-         FinishedChildrenTree ++ [NewChild|wut_to_exec_tree(NextWuT)]
+         NextFinishedChildren ++ [NewChild|wut_to_exec_tree(NextWuT)]
       },
   %%false = have_duplicates([NewChild|wut_to_exec_tree(NextWuT)]),
   NewExecutionTree.
@@ -4304,25 +4309,25 @@ distribute_interleavings_aux([TraceState|Rest], RevTracePrefix, N, FragmentTrace
                                        optimal)
       end;
     true ->
-      case WuT of
-        [] ->
+      case split_wut_at_ownership(WuT, owned, optimal) of
+        {WuT, []} ->
           distribute_interleavings_aux(Rest,
                                        [TraceState|RevTracePrefix],
                                        N,
                                        FragmentTraces,
                                        optimal);
-        [OwnedEntry|RestOwned] ->
+        {NotOwnedWuT, [OwnedEntry|RestOwned]} ->
           UpdatedTraceState =
             TraceState#trace_state_transferable{
               %%sleep_set = [UnloadedBacktrackEvent|SleepSet],
-              wakeup_tree = [fix_wut_ownership(OwnedEntry, not_owned)|RestOwned]%%,
+              wakeup_tree = NotOwnedWuT ++ [fix_wut_ownership(OwnedEntry, not_owned)|RestOwned]%%,
               %%done = [H, UnloadedBacktrackEvent|T]
              },
           NewFragmentTraceState =
             TraceState#trace_state_transferable{
               %% wakeup_tree = [UnloadedEntry],
               %% sleep_set = RestBacktrackEvents ++ SleepSet, %% TODO check if this is needed
-              wakeup_tree = [OwnedEntry|fix_wut_ownership(RestOwned, not_owned)]
+              wakeup_tree = NotOwnedWuT ++ [OwnedEntry|fix_wut_ownership(RestOwned, not_owned)]
               %%done = [H|RestBacktrackEvents] ++ T
              },
           NewFragmentTrace = [NewFragmentTraceState|RevTracePrefix],

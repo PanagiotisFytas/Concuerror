@@ -157,13 +157,13 @@ options() ->
   ,{parallel, [experimental], $p, {boolean, false},
     "Parallel exploration of interleavings",
     nolong}
-  ,{number_of_schedulers, [experimental], undefined, {integer, 3},
+  ,{number_of_schedulers, [experimental], undefined, {integer, 4},
     "Number of workers used in parallel mode",
     nolong}
-  ,{budget, [experimental], undefined, {integer, 1000},
+  ,{budget, [experimental], undefined, {integer, 10000},
     "The budget of each scheduler",
     nolong}
-  ,{fragmentation_value, [experimental], undefined, {integer, 0},
+  ,{fragmentation_value, [experimental], undefined, {integer, 4},
     "How many active fragments on the state space frontier",
     nolong}
   ,{optimal, [por], undefined, boolean,

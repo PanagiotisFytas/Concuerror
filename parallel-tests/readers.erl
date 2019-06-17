@@ -28,7 +28,7 @@ test6() ->
     last_zero(6).
 
 testN() ->
-    last_zero(9).
+    last_zero(10).
 
 testN_no_name() ->
     last_zero_no_named(7).

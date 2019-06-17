@@ -127,6 +127,13 @@ controller_loop(Status) ->
      idle_frontier = IdleFrontier
     } = Status,
   NewIdleFrontier = partition(IdleFrontier, FragmentationVal - length(Busy)),
+  %% io:fwrite("~w~n", [length(NewIdleFrontier)]),
+  %% case length(NewIdleFrontier) of
+  %%   3 ->
+  %%     io:fwrite("~p~n", [NewIdleFrontier]);
+  %%   _ ->
+  %%     ok
+  %% end,
   NewStatus = assign_work(Status#controller_status{idle_frontier = NewIdleFrontier}),
   wait_scheduler_response(NewStatus).
 
