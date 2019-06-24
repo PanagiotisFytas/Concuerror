@@ -939,7 +939,7 @@ get_next_event(Event, MaybeNeedsReplayState) ->
                     _ -> NewEvent
                   end,
                 Reason = {replay_mismatch, I, Event, New, PrintDepth},
-                io:fwrite("Event:~w~nNew:~w~n", [Event, New]),
+                %% io:fwrite("Event:~w~nNew:~w~n", [Event, New]),
                 ?crash(Reason)
             end;
           false ->
@@ -2541,8 +2541,8 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I} = _|Rest], State) -
     end
   catch
     _C:_R ->
-      io:fwrite("Event:~w~nNew:~w~n", [Event, NewEvent]),
-      io:fwrite("~n~n~w~n~n~n", [{ets_tid_to_ref, ets:tab2list(ets_tid_to_ref), ets_ref_to_tid, ets:tab2list(ets_ref_to_tid)}]),
+      %% io:fwrite("Event:~w~nNew:~w~n", [Event, NewEvent]),
+      %% io:fwrite("~n~n~w~n~n~n", [{ets_tid_to_ref, ets:tab2list(ets_tid_to_ref), ets_ref_to_tid, ets:tab2list(ets_ref_to_tid)}]),
       ?crash({replay_mismatch, I, Event, NewEvent, PrintDepth})
   end,
   NewLastScheduled =
