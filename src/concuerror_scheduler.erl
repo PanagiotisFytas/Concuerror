@@ -2839,7 +2839,15 @@ initialize_execution_tree_aux([TraceState, NextTraceState|Rest]) ->
 wut_to_exec_tree([]) ->
   [];
 wut_to_exec_tree([Entry|Rest]) ->
-  [wut_to_exec_tree_aux(Entry)|wut_to_exec_tree(Rest)].
+  T = [wut_to_exec_tree_aux(Entry)|wut_to_exec_tree(Rest)],
+  try
+    false = have_duplicates(T)
+  catch
+    C2:R2:S2 ->
+      io:fwrite("DuplicatesFok: ~n~p~n",[[C#execution_tree.event || C <- (T)]]),
+      erlang:raise(C2,R2,S2)
+  end,
+  T.
 
 wut_to_exec_tree_aux(
   #backtrack_entry_transferable{
