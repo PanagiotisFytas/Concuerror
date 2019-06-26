@@ -3455,11 +3455,20 @@ reclaim_ownership_optimal([Event], ExecTreeWuT, Origin) ->
           origin = Origin
          },
       [] = NewEntry#backtrack_entry_transferable.wakeup_tree,
-      Prefix ++ [NewEntry|Suffix];
+      Prefix ++ [NewEntry#backtrack_entry_transferable{ wakeup_tree = []}|Suffix];
     {ExecTreeWuT, []} ->
-      io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
-                [EventTransferable, ExecTreeWuT]),
-      exit(impossible7)
+      %% io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
+      %%           [EventTransferable, ExecTreeWuT]),
+      %% exit(impossible7)
+      NewEntry =
+        #backtrack_entry_transferable{
+          event = EventTransferable,
+          ownership = owned,
+          origin = Origin,
+          wakeup_tree =
+            []
+         },
+      ExecTreeWuT ++ [NewEntry]
   end;
 reclaim_ownership_optimal([Event|Rest], ExecTreeWuT, Origin) ->
   %% not_owned = Ownership,
@@ -3476,9 +3485,18 @@ reclaim_ownership_optimal([Event|Rest], ExecTreeWuT, Origin) ->
          },
       Prefix ++ [NewEntry|Suffix];
     {ExecTreeWuT, []} ->
-      io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
-                [[EventTransferable|Rest], ExecTreeWuT]),
-      exit(impossible7)
+      %% io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
+      %%           [[EventTransferable|Rest], ExecTreeWuT]),
+      %% exit(impossible7)
+      NewEntry =
+        #backtrack_entry_transferable{
+          event = EventTransferable,
+          ownership = not_owned,
+          origin = Origin,
+          wakeup_tree =
+            reclaim_ownership_optimal(Rest, [], Origin)
+         },
+      ExecTreeWuT ++ [NewEntry]
   end.
 
 
