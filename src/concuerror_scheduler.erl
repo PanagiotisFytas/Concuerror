@@ -3731,7 +3731,15 @@ get_non_transferable_sleep_from_sleep([Event|Rest]) ->
 insert_wut_into_children_opt([], Children) ->
   Children;
 insert_wut_into_children_opt(WuT, []) ->
-  wut_to_exec_tree(WuT);
+  T = wut_to_exec_tree(WuT),
+  try
+    false = have_duplicates(T)
+  catch
+    C2:R2:S2 ->
+      io:fwrite("Duplicates8: ~n~p~n",[[C#execution_tree.event || C <- (T)]]),
+      erlang:raise(C2,R2,S2)
+  end,
+  T;
 insert_wut_into_children_opt([Entry|Rest], Children) ->
   {Prefix, UpdatedOrNewChild, Suffix} = insert_wut_into_children_opt_aux(Entry, Children),
   try
@@ -3761,6 +3769,15 @@ insert_wut_into_children_opt_aux(
            origin = N,
            children = insert_wut_into_children_opt(WuT, Child#execution_tree.children)
           },
+      try
+        false = have_duplicates(Prefix ++ [NewTree] ++ Suffix)
+      catch
+        C2:R2:S2 ->
+          io:fwrite("Duplicates9 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
+          io:fwrite("Duplicates9 NewTree: ~n~p~n",[[C#execution_tree.event || C <- ([NewTree])]]),
+          io:fwrite("Duplicates9 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
+          erlang:raise(C2,R2,S2)
+      end,
       {Prefix, NewTree, Suffix};
     {Children, []} ->
       NewTree =
@@ -3769,6 +3786,14 @@ insert_wut_into_children_opt_aux(
            origin = N,
            children = wut_to_exec_tree(WuT)
           },
+      try
+        false = have_duplicates(Children ++ [NewTree])
+      catch
+        C2:R2:S2 ->
+          io:fwrite("Duplicates10 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Children)]]),
+          io:fwrite("Duplicates10 NewTree: ~n~p~n",[[C#execution_tree.event || C <- ([NewTree])]]),
+          erlang:raise(C2,R2,S2)
+      end,
       %% new wakeup tree inserted
       {Children, NewTree, []}
   end.
