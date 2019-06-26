@@ -3454,7 +3454,7 @@ reclaim_ownership_optimal([Event], ExecTreeWuT, Origin) ->
           ownership = owned,
           origin = Origin
          },
-      [] = NewEntry#backtrack_entry_transferable.wakeup_tree,
+      %% [] = NewEntry#backtrack_entry_transferable.wakeup_tree,
       Prefix ++ [NewEntry#backtrack_entry_transferable{ wakeup_tree = []}|Suffix];
     {ExecTreeWuT, []} ->
       %% io:fwrite("====================~p~n---------------~n~p~n+++++++++++++++++~n",
