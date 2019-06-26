@@ -3682,7 +3682,9 @@ insert_exec_tree_optimal_parallel(Sleep, ExecTree, V, Origin, Ref) ->
   end.
 
 insert_exec_tree(         [],  NotDep, Origin, Ref) ->
-  backtrackify_exec_tree(NotDep, Origin, Ref);
+  B = backtrackify_exec_tree(NotDep, Origin, Ref),
+  false = have_duplicates_rec(B),
+  B;
 insert_exec_tree([Node|Rest],  NotDep, Origin, Ref) ->
   #execution_tree{
      event = EventTransferable,
