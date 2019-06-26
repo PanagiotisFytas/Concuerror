@@ -3842,6 +3842,7 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
             io:fwrite("Duplicates4 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
             io:fwrite("Duplicates4 UpdatedChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedChild])]]),
             io:fwrite("Duplicates4 WuTInsertedChildren: ~n~p~n",[[C#execution_tree.event || C <- (WuTInsertedChildren)]]),
+            io:fwrite("Duplicates4 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
             io:fwrite("Next Finished: ~n~p~n", [[NextEvent|NextFinished]]),
             erlang:raise(C2,R2,S2)
         end,
