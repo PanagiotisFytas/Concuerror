@@ -3307,6 +3307,20 @@ have_duplicates([Child|Rest]) ->
       have_duplicates(Rest)
   end.
 
+have_duplicates_rec([]) ->
+  false;
+have_duplicates_rec([Child|Rest]) ->
+  #execution_tree{
+     event = Event
+    } = Child,
+  case split_children(Event, Rest) of
+    {_Prefix, [_Ch|_Suffix]} ->
+      true;
+    _ ->
+      have_duplicates_rec(Rest) or have_duplicates_rec(Child#execution_tree.children)
+  end.
+
+
 get_full_wut(CurrentWuT, AllSleep, Children) ->
   %%{OwnedWuT, NotOwnedWuT, []} = split_wut(CurrentWuT),
   ExecTreeWuT = execution_tree_to_wut(filter_children(Children, AllSleep)),
@@ -3594,6 +3608,8 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
           ++ get_non_transferable_sleep_from_exec_tree([Child|Prefix]),
         UpdatedSuffix =
           insert_all_disputed_optimal(Sleep, Suffix, DisputedBranches, Ref),
+        %% TODO remove
+        false = have_duplicates_rec(UpdatedSuffix),
         UpdatedWuT = get_wut_from_exec_tree(UpdatedSuffix, OwnedBranches, Ref),
         OwnershipFixedNextTraceState =
           NextTraceState#trace_state_transferable{
