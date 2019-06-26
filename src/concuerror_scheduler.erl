@@ -3804,7 +3804,8 @@ insert_wut_into_children_opt([Entry|Rest], Children) ->
       io:fwrite("Duplicates11 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
       io:fwrite("Duplicates11 SuffixIns: ~n~p~n",[[C#execution_tree.event || C <- (insert_wut_into_children_opt(Rest, Suffix))]]),
       erlang:raise(C3,R3,S3)
-  end.
+  end,
+  R.
 
 insert_wut_into_children_opt_aux(
   #backtrack_entry_transferable{
