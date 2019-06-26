@@ -3776,7 +3776,7 @@ insert_wut_into_children_opt([], Children) ->
 insert_wut_into_children_opt(WuT, []) ->
   T = wut_to_exec_tree(WuT),
   try
-    false = have_duplicates(T)
+    false = have_duplicates_rec(T)
   catch
     C2:R2:S2 ->
       io:fwrite("Duplicates8: ~n~p~n",[[C#execution_tree.event || C <- (T)]]),
@@ -3794,7 +3794,17 @@ insert_wut_into_children_opt([Entry|Rest], Children) ->
       io:fwrite("Duplicates7 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
       erlang:raise(C2,R2,S2)
   end,
-  Prefix ++ [UpdatedOrNewChild|insert_wut_into_children_opt(Rest, Suffix)].
+  R = Prefix ++ [UpdatedOrNewChild|insert_wut_into_children_opt(Rest, Suffix)],
+  try
+    false = have_duplicates(R)
+  catch
+    C3:R3:S3 ->
+      io:fwrite("Duplicates11 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
+      io:fwrite("Duplicates11 UpdatedOrNewChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedOrNewChild])]]),
+      io:fwrite("Duplicates11 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
+      io:fwrite("Duplicates11 SuffixIns: ~n~p~n",[[C#execution_tree.event || C <- (insert_wut_into_children_opt(Rest, Suffix))]]),
+      erlang:raise(C3,R3,S3)
+  end.
 
 insert_wut_into_children_opt_aux(
   #backtrack_entry_transferable{
