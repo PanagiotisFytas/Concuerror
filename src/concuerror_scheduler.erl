@@ -3860,7 +3860,7 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
             io:fwrite("Duplicates5 NextFinishedChildren: ~n~p~n",[[C#execution_tree.event || C <- (NextFinishedChildren)]]),
             io:fwrite("Duplicates5 NewChild: ~n~p~n",[[C#execution_tree.event || C <- ([NewChild])]]),
             io:fwrite("Duplicates5 WuTInsertedChildren: ~n~p~n",[[C#execution_tree.event || C <- (WuTInsertedChildren)]]),
-
+            io:fwrite("Next Finished: ~n~p~n", [[NextEvent|NextFinished]]),
             erlang:raise(C2,R2,S2)
         end,
         Children ++ [NewChild] ++ WuTInsertedChildren
