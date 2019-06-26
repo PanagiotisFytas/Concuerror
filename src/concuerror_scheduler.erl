@@ -3589,9 +3589,9 @@ update_execution_tree_opt_aux([TraceState], ExecutionTree) ->
 update_execution_tree_opt_aux(
   [TraceState, #trace_state_transferable{ownership = true} = NextTraceState|Rest],
   ExecutionTree) ->
-  false = have_duplicates_rec(ExecutionTree),
+  false = have_duplicates_rec([ExecutionTree]),
   UpdatedExecutionTree = insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree),
-  false = have_duplicates_rec(UpdatedExecutionTree),
+  false = have_duplicates_rec([UpdatedExecutionTree]),
   {UpdatedExecutionTree, [TraceState, NextTraceState|Rest]};
 update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
   #trace_state_transferable{
@@ -3666,7 +3666,7 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
         %% TODO remove costly assertion
         try
-          false = have_duplicates(Children ++ NextFinishedChildren ++ [NewChild|WuTInsertedChildren])
+          false = have_duplicates_rec(Children ++ NextFinishedChildren ++ [NewChild|WuTInsertedChildren])
         catch
           C2:R2:S2 ->
             io:fwrite("Duplicates2: ~n~p~n",[[C#execution_tree.event || C <- (Children ++ NextFinishedChildren ++ [NewChild|WuTInsertedChildren])]]),
