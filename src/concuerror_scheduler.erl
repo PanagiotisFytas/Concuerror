@@ -3609,6 +3609,7 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
         UpdatedSuffix =
           insert_all_disputed_optimal(Sleep, Suffix, DisputedBranches, Ref),
         %% TODO remove
+        false = have_duplicates_rec(Suffix),
         false = have_duplicates_rec(UpdatedSuffix),
         UpdatedWuT = get_wut_from_exec_tree(UpdatedSuffix, OwnedBranches, Ref),
         OwnershipFixedNextTraceState =
