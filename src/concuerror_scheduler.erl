@@ -3876,6 +3876,7 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
     case split_children_on_actor(NextEvent, Children) of
       {Prefix, [Child|Suffix]} ->
         WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, Suffix),
+        false = have_duplicates_rec(WuTInsertedChildren),
         %false = have_duplicates(WuTInsertedChildren),
         UpdatedChild = insert_new_trace([NextTraceState|Rest], Child),
         try
@@ -3893,6 +3894,7 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
         Prefix ++ [UpdatedChild] ++ WuTInsertedChildren;
       {Children, []} ->
         WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, []),
+        false = have_duplicates_rec(WuTInsertedChildren),
         % TODO remove this
         %false = have_duplicates(WuTInsertedChildren),
         NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
