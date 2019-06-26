@@ -3589,7 +3589,9 @@ update_execution_tree_opt_aux([TraceState], ExecutionTree) ->
 update_execution_tree_opt_aux(
   [TraceState, #trace_state_transferable{ownership = true} = NextTraceState|Rest],
   ExecutionTree) ->
+  false = have_duplicates_rec(ExecutionTree),
   UpdatedExecutionTree = insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree),
+  false = have_duplicates_rec(UpdatedExecutionTree),
   {UpdatedExecutionTree, [TraceState, NextTraceState|Rest]};
 update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
   #trace_state_transferable{
