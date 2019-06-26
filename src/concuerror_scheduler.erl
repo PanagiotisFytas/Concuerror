@@ -3876,7 +3876,12 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
     case split_children_on_actor(NextEvent, Children) of
       {Prefix, [Child|Suffix]} ->
         WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, Suffix),
-        false = have_duplicates_rec(WuTInsertedChildren),
+        try
+          false = have_duplicates_rec(WuTInsertedChildren)
+        catch
+          C3:R3:S3 ->
+            io:fwrite("------------~n~p~n@@@@@@@@@@@@@@2~n~p~n", [NextWuT, Suffix])
+        end,
         %false = have_duplicates(WuTInsertedChildren),
         UpdatedChild = insert_new_trace([NextTraceState|Rest], Child),
         try
