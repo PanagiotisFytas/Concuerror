@@ -3734,6 +3734,15 @@ insert_wut_into_children_opt(WuT, []) ->
   wut_to_exec_tree(WuT);
 insert_wut_into_children_opt([Entry|Rest], Children) ->
   {Prefix, UpdatedOrNewChild, Suffix} = insert_wut_into_children_opt_aux(Entry, Children),
+  try
+    false = have_duplicates(Prefix ++ [UpdatedOrNewChild] ++ Suffix)
+  catch
+    C2:R2:S2 ->
+      io:fwrite("Duplicates7 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
+      io:fwrite("Duplicates7 UpdatedOrNewChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedOrNewChild])]]),
+      io:fwrite("Duplicates7 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
+      erlang:raise(C2,R2,S2)
+  end,
   Prefix ++ [UpdatedOrNewChild|insert_wut_into_children_opt(Rest, Suffix)].
 
 insert_wut_into_children_opt_aux(
