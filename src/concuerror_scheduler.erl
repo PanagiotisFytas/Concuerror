@@ -3925,11 +3925,13 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
   %%     ok
   %% end,
   %%false = have_duplicates(TraceInsertedChildren),
+  false = have_duplicates_rec([ExecutionTree]),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
       children = TraceInsertedChildren
      },
-   UpdatedExecutionTree.
+  false = have_duplicates_rec([UpdatedExecutionTree]),
+  UpdatedExecutionTree.
 
 
 insert_completely_new_trace([TraceState]) ->
