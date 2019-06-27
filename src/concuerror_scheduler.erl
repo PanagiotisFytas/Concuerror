@@ -3803,6 +3803,9 @@ insert_wut_into_children_opt([Entry|Rest], Children) ->
       io:fwrite("Duplicates11 UpdatedOrNewChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedOrNewChild])]]),
       io:fwrite("Duplicates11 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
       io:fwrite("Duplicates11 SuffixIns: ~n~p~n",[[C#execution_tree.event || C <- (insert_wut_into_children_opt(Rest, Suffix))]]),
+      io:fwrite("Duplicates11 Children: ~n~p~n",[[C#execution_tree.event || C <- (Children)]]),
+      io:fwrite("Duplicates11 Entry: ~n~p~n",[Entry]),
+      io:fwrite("Duplicates11 Rest: ~n~p~n",[[Rest]]),
       erlang:raise(C3,R3,S3)
   end,
   R.
