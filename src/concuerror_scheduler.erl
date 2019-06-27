@@ -3894,7 +3894,8 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
           false = have_duplicates_rec(WuTInsertedChildren)
         catch
           C3:R3:S3 ->
-            io:fwrite("------------~n~p~n@@@@@@@@@@@@@@2~n~p~n", [NextWuT, Suffix])
+            io:fwrite("------------~n~p~n@@@@@@@@@@@@@@2~n~p~n", [NextWuT, Suffix]),
+            erlang:raise(C3,R3,S3)
         end,
         %false = have_duplicates(WuTInsertedChildren),
         UpdatedChild = insert_new_trace([NextTraceState|Rest], Child),
