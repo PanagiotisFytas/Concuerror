@@ -5035,7 +5035,7 @@ revert_state(PreviousState, ReducedState) ->
     last_scheduled = list_to_pid(LastScheduled),
     need_to_replay = NeedToReplay,
     origin = Origin,
-    trace = [revert_trace_state(TraceState, Safe) || TraceState <- Trace]
+    trace = [revert_trace_state(TraceState, false) || TraceState <- Trace]
    },
   %% ets:delete(ets_transferable),
   NewState.
