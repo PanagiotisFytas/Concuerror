@@ -3902,6 +3902,7 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
             insert_wut_into_children_opt(NextWuT, Suffix)
           catch
             C4:R4:S4 ->
+              io:fwrite("CATCH2 Event: ~p~nNextEvent~p~n", [Event,NextEvent]),
               io:fwrite("CATACH2 NextWuT: ~n~p~n", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
               io:fwrite("CATACH2 Suffix: ~n~p~n", [[C#execution_tree.event || C <- (Suffix)]]),
               io:fwrite("CATACH2 Children: ~n~p~n", [[C#execution_tree.event || C <- (Suffix)]]),
