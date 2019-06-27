@@ -3661,7 +3661,14 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
             io:fwrite("~p~n", [NextEvent]),
             erlang:raise(C, R, erlang:get_stacktrace())
         end,
-        WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, []),
+        WuTInsertedChildren = 
+          try
+            insert_wut_into_children_opt(NextWuT, [])
+          catch
+            C3:R3:S3 ->
+              io:fwrite("CATACH1 NextWuT: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
+              io:fwrite("CATACH1 []: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- ([])]])
+          end,
         NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
         %% TODO remove costly assertion
@@ -3889,7 +3896,15 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
   TraceInsertedChildren =
     case split_children_on_actor(NextEvent, Children) of
       {Prefix, [Child|Suffix]} ->
-        WuTInsertedChildren = insert_wut_into_children_opt(NextWuT, Suffix),
+        WuTInsertedChildren =
+          try
+            insert_wut_into_children_opt(NextWuT, Suffix)
+          catch
+            C3:R3:S3 ->
+              io:fwrite("CATACH2 NextWuT: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
+              io:fwrite("CATACH2 Suffix: ~p~n~p", [[C#execution_tree.event || C <- (Suffix)]]),
+              io:fwrite("CATACH2 Children: ~p~n~p", [[C#execution_tree.event || C <- (Suffix)]])
+          end,
         try
           false = have_duplicates_rec(WuTInsertedChildren)
         catch
