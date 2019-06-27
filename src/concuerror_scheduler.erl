@@ -3666,8 +3666,8 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
             insert_wut_into_children_opt(NextWuT, [])
           catch
             C3:R3:S3 ->
-              io:fwrite("CATACH1 NextWuT: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
-              io:fwrite("CATACH1 []: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- ([])]]),
+              io:fwrite("CATACH1 NextWuT: ~n~p~n", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
+              io:fwrite("CATACH1 []: ~n~p~n", [[C#backtrack_entry_transferable.event || C <- ([])]]),
               erlang:raise(C3,R3,S3)
           end,
         NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
@@ -3902,9 +3902,9 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
             insert_wut_into_children_opt(NextWuT, Suffix)
           catch
             C4:R4:S4 ->
-              io:fwrite("CATACH2 NextWuT: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
-              io:fwrite("CATACH2 Suffix: ~p~n~p", [[C#execution_tree.event || C <- (Suffix)]]),
-              io:fwrite("CATACH2 Children: ~p~n~p", [[C#execution_tree.event || C <- (Suffix)]]),
+              io:fwrite("CATACH2 NextWuT: ~n~p~n", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
+              io:fwrite("CATACH2 Suffix: ~n~p~n", [[C#execution_tree.event || C <- (Suffix)]]),
+              io:fwrite("CATACH2 Children: ~n~p~n", [[C#execution_tree.event || C <- (Suffix)]]),
               erlang:raise(C4,R4,S4)
           end,
         try
@@ -3935,8 +3935,8 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
             insert_wut_into_children_opt(NextWuT, [])
           catch
             C3:R3:S3 ->
-              io:fwrite("CATACH3 NextWuT: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
-              io:fwrite("CATACH3 []: ~p~n~p", [[C#backtrack_entry_transferable.event || C <- ([])]]),
+              io:fwrite("CATACH3 NextWuT: ~n~p~n", [[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
+              io:fwrite("CATACH3 []: ~n~p~n", [[C#backtrack_entry_transferable.event || C <- ([])]]),
               erlang:raise(C3,R3,S3)
           end,
         false = have_duplicates_rec(WuTInsertedChildren),
