@@ -189,6 +189,11 @@
 -define(time_unit, milli_seconds).
 -define(budget, 1000).
 
+-define(assert_no_duplicates(_A), ok).
+-define(assert_no_duplicates_rec(_A), ok).
+-define(assert_no_duplicates_rec_strict(_A), ok).
+
+
 -ifdef(BEFORE_OTP_20).
 -define(format_hash(Hash), lists:nth(1, io_lib:format("~.16b",[Hash]))).
 -define(is_tid(MaybeTid), is_integer(MaybeTid)).

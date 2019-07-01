@@ -2840,13 +2840,7 @@ wut_to_exec_tree([]) ->
   [];
 wut_to_exec_tree([Entry|Rest]) ->
   T = [wut_to_exec_tree_aux(Entry)|wut_to_exec_tree(Rest)],
-  try
-    false = have_duplicates(T)
-  catch
-    C2:R2:S2 ->
-      io:fwrite("DuplicatesFok: ~n~p~n",[[C#execution_tree.event || C <- (T)]]),
-      erlang:raise(C2,R2,S2)
-  end,
+  ?assert_no_duplicates(T),
   T.
 
 wut_to_exec_tree_aux(
@@ -3195,8 +3189,8 @@ update_execution_tree_aux(
   [OldNextActiveEvent|_] = OldNextDone,
   {WuTInsertedChildren, FixedNextWuT, LocalEntriesRemoved} =
     insert_wut_into_children(NextWuT, Children, [], 0),
-  false = have_duplicates(Children),
-  false = have_duplicates(WuTInsertedChildren),
+  ?assert_no_duplicates(Children),
+  ?assert_no_duplicates(WuTInsertedChildren),
   try true = length(WuTInsertedChildren) >= length(Children)
   catch _:_ ->
       io:fwrite("Children: ~p~n WuTinsertedChildren: ~p~n",
@@ -3247,7 +3241,7 @@ update_execution_tree_aux(
           {UpdatedTrace, UpdatedChild, N} ->
             {UpdatedTrace, Prefix ++ [UpdatedChild] ++ Suffix, [], N}
         end,
-      false = have_duplicates(UpdatedChildren),
+      ?assert_no_duplicates(UpdatedChildren),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
           children = UpdatedChildren
@@ -3285,14 +3279,16 @@ update_execution_tree_aux(
           {UpdatedChildren, []} ->
             UpdatedChildren ++ [initialize_execution_tree_aux([UpdatedNextTraceState|Rest])]
         end,
-      false = have_duplicates(UpdatedChildren),
-      false = have_duplicates(FixedChildren),
+      ?assert_no_duplicates(UpdatedChildren),
+      ?assert_no_duplicates(FixedChildren),
       UpdatedExecutionTree =
         ExecutionTree#execution_tree{
           children = FixedChildren
          },
       {[TraceState, UpdatedNextTraceState|Rest], UpdatedExecutionTree, LocalEntriesRemoved}
   end.
+
+
 
 have_duplicates([]) ->
   false;
@@ -3589,9 +3585,9 @@ update_execution_tree_opt_aux([TraceState], ExecutionTree) ->
 update_execution_tree_opt_aux(
   [TraceState, #trace_state_transferable{ownership = true} = NextTraceState|Rest],
   ExecutionTree) ->
-  false = have_duplicates_rec([ExecutionTree]),
+  ?assert_no_duplicates_rec([ExecutionTree]),
   UpdatedExecutionTree = insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree),
-  false = have_duplicates_rec([UpdatedExecutionTree]),
+  ?assert_no_duplicates_rec([UpdatedExecutionTree]),
   {UpdatedExecutionTree, [TraceState, NextTraceState|Rest]};
 update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) ->
   #trace_state_transferable{
@@ -3624,9 +3620,9 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
         UpdatedSuffix =
           insert_all_disputed_optimal(Sleep, Suffix, DisputedBranches, Ref),
         %% TODO remove
-        false = have_duplicates_rec(Suffix),
-        false = have_duplicates_rec_strict(Suffix),
-        false = have_duplicates_rec(UpdatedSuffix),
+        ?assert_no_duplicates_rec(Suffix),
+        ?assert_no_duplicates_strict(Suffix),
+        ?assert_no_duplicates_rec(UpdatedSuffix),
         UpdatedWuT = get_wut_from_exec_tree(UpdatedSuffix, OwnedBranches, Ref),
         OwnershipFixedNextTraceState =
           NextTraceState#trace_state_transferable{
@@ -3639,17 +3635,6 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
         %% end,
         {UpdatedChild, [OwnershipFixedNextTraceState|FixedRest]} =
           update_execution_tree_opt_aux([OwnershipFixedNextTraceState|Rest], Child),
-        %% TODO remove costly assertion
-        try
-          false = have_duplicates(Prefix ++ [UpdatedChild|UpdatedSuffix])
-        catch
-          C1:R1:S1 ->
-            io:fwrite("Duplicates1 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
-            io:fwrite("Duplicates1 UpdatedChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedChild])]]),
-            io:fwrite("Duplicates1 UpdatedSuffix: ~n~p~n",[[C#execution_tree.event || C <- (UpdatedSuffix)]]),
-            io:fwrite("Duplicates1 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
-            erlang:raise(C1,R1,S1)
-        end,
         {Prefix ++ [UpdatedChild|UpdatedSuffix],
          [OwnershipFixedNextTraceState|FixedRest]};
       {Children, []} ->
@@ -3672,14 +3657,6 @@ update_execution_tree_opt_aux([TraceState, NextTraceState|Rest], ExecutionTree) 
           end,
         NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
-        %% TODO remove costly assertion
-        try
-          false = have_duplicates_rec(Children ++ NextFinishedChildren ++ [NewChild|WuTInsertedChildren])
-        catch
-          C2:R2:S2 ->
-            io:fwrite("Duplicates2: ~n~p~n",[[C#execution_tree.event || C <- (Children ++ NextFinishedChildren ++ [NewChild|WuTInsertedChildren])]]),
-            erlang:raise(C2,R2,S2)
-        end,
         {Children ++ NextFinishedChildren ++ [NewChild|WuTInsertedChildren], [NextTraceState|Rest]}
     end,
   UpdatedExecutionTree =
@@ -3708,7 +3685,7 @@ insert_exec_tree_optimal_parallel(Sleep, ExecTree, V, Origin, Ref) ->
 
 insert_exec_tree(         [],  NotDep, Origin, Ref) ->
   B = backtrackify_exec_tree(NotDep, Origin, Ref),
-  false = have_duplicates_rec(B),
+  ?assert_no_duplicates_rec(B),
   B;
 insert_exec_tree([Node|Rest],  NotDep, Origin, Ref) ->
   #execution_tree{
@@ -3783,39 +3760,13 @@ insert_wut_into_children_opt([], Children) ->
   Children;
 insert_wut_into_children_opt(WuT, []) ->
   T = wut_to_exec_tree(WuT),
-  try
-    false = have_duplicates_rec(T)
-  catch
-    C2:R2:S2 ->
-      io:fwrite("Duplicates8: ~n~p~n",[[C#execution_tree.event || C <- (T)]]),
-      erlang:raise(C2,R2,S2)
-  end,
+  ?assert_no_duplicates_rec(T),
   T;
 insert_wut_into_children_opt([Entry|Rest], Children) ->
   {Prefix, UpdatedOrNewChild, Suffix} = insert_wut_into_children_opt_aux(Entry, Children),
-  try
-    false = have_duplicates(Prefix ++ [UpdatedOrNewChild] ++ Suffix)
-  catch
-    C2:R2:S2 ->
-      io:fwrite("Duplicates7 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
-      io:fwrite("Duplicates7 UpdatedOrNewChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedOrNewChild])]]),
-      io:fwrite("Duplicates7 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
-      erlang:raise(C2,R2,S2)
-  end,
+  ?assert_no_duplicates(Prefix ++ [UpdatedOrNewChild] ++ Suffix),
   R = Prefix ++ [UpdatedOrNewChild|insert_wut_into_children_opt(Rest, Suffix)],
-  try
-    false = have_duplicates(R)
-  catch
-    C3:R3:S3 ->
-      io:fwrite("Duplicates11 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
-      io:fwrite("Duplicates11 UpdatedOrNewChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedOrNewChild])]]),
-      io:fwrite("Duplicates11 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
-      io:fwrite("Duplicates11 SuffixIns: ~n~p~n",[[C#execution_tree.event || C <- (insert_wut_into_children_opt(Rest, Suffix))]]),
-      io:fwrite("Duplicates11 Children: ~n~p~n",[[C#execution_tree.event || C <- (Children)]]),
-      io:fwrite("Duplicates11 Entry: ~n~p~n",[Entry]),
-      io:fwrite("Duplicates11 Rest: ~n~p~n",[[Rest]]),
-      erlang:raise(C3,R3,S3)
-  end,
+  ?assert_no_duplicates(R),
   R.
 
 insert_wut_into_children_opt_aux(
@@ -3834,15 +3785,7 @@ insert_wut_into_children_opt_aux(
            origin = N,
            children = insert_wut_into_children_opt(WuT, Child#execution_tree.children)
           },
-      try
-        false = have_duplicates(Prefix ++ [NewTree] ++ Suffix)
-      catch
-        C2:R2:S2 ->
-          io:fwrite("Duplicates9 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
-          io:fwrite("Duplicates9 NewTree: ~n~p~n",[[C#execution_tree.event || C <- ([NewTree])]]),
-          io:fwrite("Duplicates9 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
-          erlang:raise(C2,R2,S2)
-      end,
+      ?assert_no_duplicates(Prefix ++ [NewTree] ++ Suffix),
       {Prefix, NewTree, Suffix};
     {Children, []} ->
       NewTree =
@@ -3851,14 +3794,7 @@ insert_wut_into_children_opt_aux(
            origin = N,
            children = wut_to_exec_tree(WuT)
           },
-      try
-        false = have_duplicates(Children ++ [NewTree])
-      catch
-        C2:R2:S2 ->
-          io:fwrite("Duplicates10 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Children)]]),
-          io:fwrite("Duplicates10 NewTree: ~n~p~n",[[C#execution_tree.event || C <- ([NewTree])]]),
-          erlang:raise(C2,R2,S2)
-      end,
+      ?assert_no_duplicates(Children ++ [NewTree]),
       %% new wakeup tree inserted
       {Children, NewTree, []}
   end.
@@ -3908,27 +3844,10 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
               io:fwrite("CATACH2 Children: ~n~p~n", [[C#execution_tree.event || C <- (Suffix)]]),
               erlang:raise(C4,R4,S4)
           end,
-        try
-          false = have_duplicates_rec(WuTInsertedChildren)
-        catch
-          C3:R3:S3 ->
-            io:fwrite("------------~n~p~n@@@@@@@@@@@@@@2~n~p~n", [NextWuT, Suffix]),
-            erlang:raise(C3,R3,S3)
-        end,
+        ?assert_no_duplicates_rec(WuTInsertedChildren),
         %false = have_duplicates(WuTInsertedChildren),
         UpdatedChild = insert_new_trace([NextTraceState|Rest], Child),
-        try
-          false = have_duplicates(Prefix ++ [UpdatedChild] ++ WuTInsertedChildren)
-        catch
-          C2:R2:S2 ->
-            io:fwrite("Duplicates4 Prefix: ~n~p~n",[[C#execution_tree.event || C <- (Prefix)]]),
-            io:fwrite("Duplicates4 UpdatedChild: ~n~p~n",[[C#execution_tree.event || C <- ([UpdatedChild])]]),
-            io:fwrite("Duplicates4 WuTInsertedChildren: ~n~p~n",[[C#execution_tree.event || C <- (WuTInsertedChildren)]]),
-            io:fwrite("Duplicates4 NextWuT: ~n~p~n",[[C#backtrack_entry_transferable.event || C <- (NextWuT)]]),
-            io:fwrite("Duplicates4 Suffix: ~n~p~n",[[C#execution_tree.event || C <- (Suffix)]]),
-            io:fwrite("Next Finished: ~n~p~n", [[NextEvent|NextFinished]]),
-            erlang:raise(C2,R2,S2)
-        end,
+        ?assert_no_duplicates(Prefix ++ [UpdatedChild] ++ WuTInsertedChildren),
         Prefix ++ [UpdatedChild] ++ WuTInsertedChildren;
       {Children, []} ->
         WuTInsertedChildren = 
@@ -3940,22 +3859,12 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
               io:fwrite("CATACH3 []: ~n~p~n", [[C#backtrack_entry_transferable.event || C <- ([])]]),
               erlang:raise(C3,R3,S3)
           end,
-        false = have_duplicates_rec(WuTInsertedChildren),
+        ?assert_no_duplicates_rec(WuTInsertedChildren),
         % TODO remove this
         %false = have_duplicates(WuTInsertedChildren),
         NextFinishedChildren = [#execution_tree{event = Ev} || Ev <- NextFinished],
         NewChild = insert_completely_new_trace([NextTraceState|Rest]),
-        try
-          false = have_duplicates(Children ++ [NewChild] ++ WuTInsertedChildren)
-        catch
-          C2:R2:S2 ->
-            io:fwrite("Duplicates5 Children: ~n~p~n",[[C#execution_tree.event || C <- (Children)]]),
-            io:fwrite("Duplicates5 NextFinishedChildren: ~n~p~n",[[C#execution_tree.event || C <- (NextFinishedChildren)]]),
-            io:fwrite("Duplicates5 NewChild: ~n~p~n",[[C#execution_tree.event || C <- ([NewChild])]]),
-            io:fwrite("Duplicates5 WuTInsertedChildren: ~n~p~n",[[C#execution_tree.event || C <- (WuTInsertedChildren)]]),
-            io:fwrite("Next Finished: ~n~p~n", [[NextEvent|NextFinished]]),
-            erlang:raise(C2,R2,S2)
-        end,
+        ?assert_no_duplicates(Children ++ [NewChild] ++ WuTInsertedChildren),
         Children ++ [NewChild] ++ WuTInsertedChildren
     end,
   %% case have_duplicates(TraceInsertedChildren) of
@@ -3973,12 +3882,12 @@ insert_new_trace([TraceState, NextTraceState|Rest], ExecutionTree) ->
   %%     ok
   %% end,
   %%false = have_duplicates(TraceInsertedChildren),
-  false = have_duplicates_rec([ExecutionTree]),
+  ?assert_no_duplicates_rec([ExecutionTree]),
   UpdatedExecutionTree =
     ExecutionTree#execution_tree{
       children = TraceInsertedChildren
      },
-  false = have_duplicates_rec([UpdatedExecutionTree]),
+  ?assert_no_duplicates_rec([UpdatedExecutionTree]),
   UpdatedExecutionTree.
 
 
@@ -4019,13 +3928,7 @@ insert_completely_new_trace([TraceState, NextTraceState|Rest]) ->
        children =
          NextFinishedChildren ++ [NewChild|wut_to_exec_tree(NextWuT)]
       },
-  try
-    false = have_duplicates(NextFinishedChildren ++ [NewChild|wut_to_exec_tree(NextWuT)])
-  catch
-    C2:R2:S2 ->
-      io:fwrite("Duplicates3: ~n~p~n",[[C#execution_tree.event || C <- (NextFinishedChildren ++ [NewChild|wut_to_exec_tree(NextWuT)])]]),
-      erlang:raise(C2,R2,S2)
-  end,
+  ?assert_no_duplicates(NextFinishedChildren ++ [NewChild|wut_to_exec_tree(NextWuT)]),
   %%false = have_duplicates([NewChild|wut_to_exec_tree(NextWuT)]),
   NewExecutionTree.
 
