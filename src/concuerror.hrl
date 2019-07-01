@@ -191,7 +191,7 @@
 
 -define(assert_no_duplicates(_A), ok).
 -define(assert_no_duplicates_rec(_A), ok).
--define(assert_no_duplicates_rec_strict(_A), ok).
+-define(assert_no_duplicates_strict(_A), ok).
 
 
 -ifdef(BEFORE_OTP_20).
