@@ -216,15 +216,15 @@
 -type trace_state_transferable() :: #trace_state_transferable{}.
 
 -record(reduced_scheduler_state, {
-          backtrack_size  :: pos_integer(),
-          dpor            :: concuerror_options:dpor(),
-          interleaving_id :: interleaving_id(),
-          last_scheduled  :: string(),
-          need_to_replay  :: boolean(),
-          origin          :: interleaving_id(),
+          backtrack_size       :: pos_integer(),
+          dpor = undefined     :: concuerror_options:dpor() | undefined,
+          interleaving_id      :: interleaving_id(),
+          last_scheduled       :: string(),
+          need_to_replay       :: boolean(),
+          origin               :: interleaving_id(),
           processes_ets_tables :: [atom()],
-          safe            :: boolean(),
-          trace           :: [trace_state_transferable()]
+          safe                 :: boolean(),
+          trace                :: [trace_state_transferable()]
          }).
 
 -type reduced_scheduler_state() :: #reduced_scheduler_state{}.
@@ -4928,17 +4928,25 @@ revert_state(PreviousState, ReducedState) ->
      %% processes_ets_tables = ProcessesEtsTables,
      safe = Safe, %% safe meens that this fragment has not been distributed
      %% TODO maybe remove this
-     trace = Trace
+     trace = Trace,
+     dpor = DPOR
     } = ReducedState,
   %% ets:new(ets_transferable, [named_table, public]),
   %% maybe_create_new_tables(ProcessesEtsTables),
+  FinalSafe =
+    case DPOR of
+      optimal ->
+        false;
+      source ->
+        Safe
+    end,
   NewState =
     PreviousState#scheduler_state{
     interleaving_id = InterleavingId,
     last_scheduled = list_to_pid(LastScheduled),
     need_to_replay = NeedToReplay,
     origin = Origin,
-    trace = [revert_trace_state(TraceState, false) || TraceState <- Trace]
+    trace = [revert_trace_state(TraceState, FinalSafe) || TraceState <- Trace]
    },
   %% ets:delete(ets_transferable),
   NewState.
