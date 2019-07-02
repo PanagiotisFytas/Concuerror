@@ -7,17 +7,19 @@
 -include("concuerror.hrl").
 
 -record(controller_status, {
-                            fragmentation_val    :: non_neg_integer(),
-                            execution_tree       :: concuerror_scheduler:execution_tree(),
-                            schedulers_uptime    :: map(),
-                            busy                 :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
-                            idle                 :: [pid()],
-                            idle_frontier        :: [concuerror_scheduler:reduced_scheduler_state()],
-                            scheduling_start     :: integer(),
-                            budget_exceeded = 0  :: integer(),
-                            ownership_claims = 0 :: integer(),
-                            budget               :: integer(),
-                            dpor                 :: source | optimal
+                            fragmentation_val        :: non_neg_integer(),
+                            %% execution_tree           :: concuerror_scheduler:execution_tree(),
+                            schedulers_uptime        :: map(),
+                            busy                     :: [{pid(), concuerror_scheduler:reduced_scheduler_state()}],
+                            idle                     :: [pid()],
+                            idle_frontier            :: [concuerror_scheduler:reduced_scheduler_state()],
+                            scheduling_start         :: integer(),
+                            budget_exceeded = 0      :: integer(),
+                            ownership_claims = 0     :: integer(),
+                            budget                   :: integer(),
+                            dpor                     :: source | optimal,
+                            tree_manager             :: pid(),
+                            fragments_in_manager = 0 :: non_neg_integer()
                            }).
 
 %%------------------------------------------------------------------------------
@@ -68,17 +70,29 @@ initialize_controller(Nodes, Options) ->
       false ->
         OptFragmentationValue
     end,
+  DPOR = ?opt(dpor, Options),
+  Self = self(),
+  TreeManagerFun =
+    fun() ->
+        case DPOR of
+          optimal ->
+            tree_manager_optimal(ExecutionTree, Self);
+          source ->
+            tree_manager_source(ExecutionTree, Self)
+        end
+    end,
   InitialStatus =
     #controller_status{
        fragmentation_val = FragmentationValue,
        schedulers_uptime = NewUptimes,
        busy = Busy,
-       execution_tree = ExecutionTree,
+       %% execution_tree = ExecutionTree,
        idle = Idle,
        idle_frontier = IdleFrontier,
        scheduling_start = SchedulingStart,
        budget = ?opt(budget, Options),
-       dpor = ?opt(dpor, Options)
+       dpor = DPOR,
+       tree_manager = spawn_link(TreeManagerFun)
       },
   set_up_parallel_ets(),
   controller_loop(InitialStatus).
@@ -94,9 +108,10 @@ get_schedulers(N, SchedulerNumbers) ->
 
 controller_loop(#controller_status{
                    busy = Busy,
-                   idle_frontier = IdleFrontier
+                   idle_frontier = IdleFrontier,
+                   fragments_in_manager = FiM
                   } = Status)
-  when IdleFrontier =:= [] andalso Busy =:= [] ->
+  when IdleFrontier =:= [] andalso Busy =:= [] andalso FiM =:= 0 ->
   SchedulingEnd = erlang:monotonic_time(),
   %% TODO : remove this check
   %% empty = Status#controller_status.execution_tree, %% this does not hold true
@@ -132,9 +147,10 @@ controller_loop(Status) ->
      fragmentation_val = FragmentationVal,
      busy = Busy,
      %% idle = Idle,
-     idle_frontier = IdleFrontier
+     idle_frontier = IdleFrontier,
+     fragments_in_manager = FiM
     } = Status,
-  NewIdleFrontier = partition(IdleFrontier, FragmentationVal - length(Busy)),
+  NewIdleFrontier = partition(IdleFrontier, FragmentationVal - length(Busy) - FiM),
   NewStatus = assign_work(Status#controller_status{idle_frontier = NewIdleFrontier}),
   wait_scheduler_response(NewStatus).
 
@@ -142,14 +158,27 @@ wait_scheduler_response(Status) ->
   #controller_status{
      schedulers_uptime = Uptimes,
      busy = Busy,
-     execution_tree = ExecutionTree,
      idle = Idle,
      idle_frontier = IdleFrontier,
      budget_exceeded = BE,
      ownership_claims = OC,
-     dpor = DPOR
+     dpor = DPOR,
+     tree_manager = Manager,
+     fragments_in_manager = FiM
     } = Status,
   receive
+    {execution_tree_updated, Manager, NewIdleFragment} ->
+      NewIdleFrontier =
+        case NewIdleFragment =:= fragment_finished of
+          false ->
+            [NewIdleFragment|IdleFrontier];
+          true ->
+            IdleFrontier
+        end,
+      controller_loop(Status#controller_status{
+                        idle_frontier = NewIdleFrontier,
+                        fragments_in_manager = FiM - 1
+                       });
     {claim_ownership, Scheduler, Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       {Scheduler, OldFragment} =
@@ -161,31 +190,35 @@ wait_scheduler_response(Status) ->
         end,
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
-      WorkReassignedStatus = assign_work(Status#controller_status{
-                                           schedulers_uptime = NewUptimes,
-                                           busy = NewBusy,
-                                           idle = NewIdle,
-                                           ownership_claims = OC + 1
-                                          }),
-      UpdatedIdleFrontier = WorkReassignedStatus#controller_status.idle_frontier,
-      {NewIdleFragment, NewExecutionTree} =
-        case DPOR of
-          source ->
-            concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree);
-          optimal ->
-            concuerror_scheduler:update_execution_tree_opt(Fragment, ExecutionTree)
-        end,
-      NewIdleFrontier =
-        case NewIdleFragment =:= fragment_finished of
-          false ->
-            [NewIdleFragment|UpdatedIdleFrontier];
-          true ->
-            UpdatedIdleFrontier
-        end,
-      controller_loop(WorkReassignedStatus#controller_status{
-                        execution_tree = NewExecutionTree,
-                        idle_frontier = NewIdleFrontier
-                       });
+      WorkReassignedStatus = Status#controller_status{
+                               schedulers_uptime = NewUptimes,
+                               busy = NewBusy,
+                               idle = NewIdle,
+                               ownership_claims = OC + 1,
+                               fragments_in_manager = FiM + 1
+                              },
+      case DPOR of
+        source ->
+          Manager ! {update, OldFragment, Fragment};
+        optimal ->
+          Manager ! {update, Fragment}
+      end,
+      %% UpdatedIdleFrontier = WorkReassignedStatus#controller_status.idle_frontier,
+      %% {NewIdleFragment, NewExecutionTree} =
+      %%   case DPOR of
+      %%     source ->
+      %%       concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree);
+      %%     optimal ->
+      %%       concuerror_scheduler:update_execution_tree_opt(Fragment, ExecutionTree)
+      %%   end,
+      %% NewIdleFrontier =
+      %%   case NewIdleFragment =:= fragment_finished of
+      %%     false ->
+      %%       [NewIdleFragment|UpdatedIdleFrontier];
+      %%     true ->
+      %%       UpdatedIdleFrontier
+      %%   end,
+      controller_loop(WorkReassignedStatus);
     {budget_exceeded, Scheduler, Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       {Scheduler, OldFragment} = 
@@ -197,31 +230,27 @@ wait_scheduler_response(Status) ->
         end,
       NewBusy = lists:keydelete(Scheduler, 1, Busy),
       NewIdle = [Scheduler|Idle],
-      WorkReassignedStatus = assign_work(Status#controller_status{
-                                           schedulers_uptime = NewUptimes,
-                                           busy = NewBusy,
-                                           idle = NewIdle,
-                                           budget_exceeded = BE + 1
-                                          }),
-      UpdatedIdleFrontier = WorkReassignedStatus#controller_status.idle_frontier,
-      {NewIdleFragment, NewExecutionTree} =
-        case DPOR of
-          source ->
-            concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree);
-          optimal ->
-            concuerror_scheduler:update_execution_tree_opt(Fragment, ExecutionTree)
-        end,
-      NewIdleFrontier =
-        case NewIdleFragment =:= fragment_finished of
-          false ->
-            [NewIdleFragment|UpdatedIdleFrontier];
-          true ->
-            UpdatedIdleFrontier
-        end,
-      controller_loop(WorkReassignedStatus#controller_status{
-                        execution_tree = NewExecutionTree,
-                        idle_frontier = NewIdleFrontier
-                       });
+      WorkReassignedStatus = Status#controller_status{
+                               schedulers_uptime = NewUptimes,
+                               busy = NewBusy,
+                               idle = NewIdle,
+                               budget_exceeded = BE + 1,
+                               fragments_in_manager = FiM + 1
+                              },
+      case DPOR of
+        source ->
+          Manager ! {update, OldFragment, Fragment};
+        optimal ->
+          Manager ! {update, Fragment}
+      end,
+      %% NewIdleFrontier =
+      %%   case NewIdleFragment =:= fragment_finished of
+      %%     false ->
+      %%       [NewIdleFragment|UpdatedIdleFrontier];
+      %%     true ->
+      %%       UpdatedIdleFrontier
+      %%   end,
+      controller_loop(WorkReassignedStatus);
     {done, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
       {Scheduler, _CompletedFragment} = 
@@ -242,12 +271,9 @@ wait_scheduler_response(Status) ->
       %% fragment and use this to update a master tree with the nodes
       %% that have been explored by it 
       NewIdle = [Scheduler|Idle],
-      NewExecutionTree =
-        ExecutionTree,%%concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
       controller_loop(Status#controller_status{
                         schedulers_uptime = NewUptimes,
                         busy = NewBusy,
-                        execution_tree = NewExecutionTree,
                         idle = NewIdle
                        });
     {error_found, Scheduler, Duration, IE} ->
@@ -270,13 +296,10 @@ wait_scheduler_response(Status) ->
       %% fragment and use this to update a master tree with the nodes
       %% that have been explored by it 
       NewIdle = [Scheduler|Idle],
-      NewExecutionTree =
-        ExecutionTree,%%concuerror_scheduler:update_execution_tree_done(CompletedFragment, ExecutionTree),
       FinishedStatus = 
         wait_for_schedulers_to_finish(Status#controller_status{
                                         schedulers_uptime = NewUptimes,
                                         busy = NewBusy,
-                                        execution_tree = NewExecutionTree,
                                         idle = NewIdle
                                        }),
       controller_loop(FinishedStatus);
@@ -290,6 +313,7 @@ wait_scheduler_response(Status) ->
          busy = Busy,
          scheduling_start = SchedulingStart
         } = Status,
+      %% Manager ! stop,
       BusyPids = lists:map(fun({P, _}) -> P end, Busy),
       Schedulers = [Scheduler || Scheduler <- Idle ++ BusyPids, is_non_local_process_alive(Scheduler)],
       lists:foreach(fun(Scheduler) -> Scheduler ! finish end, Schedulers),
@@ -496,3 +520,29 @@ report_avg_time([], Sum, N) ->
   io:fwrite("Total of ~B interleavings with average duration of ~.3fs~n", [N, Sum/1000/N]);
 report_avg_time([{_, {_, Duration, IE}}|Rest], Sum, N) ->
   report_avg_time(Rest, Sum + Duration, N + IE).
+
+%%------------------------------------------------------------------------------
+
+tree_manager_source(ExecutionTree, Controller) ->
+  receive
+    {update, OldFragment, Fragment} ->
+      {NewIdleFragment, NewExecutionTree} =
+        concuerror_scheduler:update_execution_tree(OldFragment, Fragment, ExecutionTree),
+      Controller ! {execution_tree_updated, self(), NewIdleFragment},
+      tree_manager_source(NewExecutionTree, Controller);
+    stop ->
+      ok
+  end.
+
+tree_manager_optimal(ExecutionTree, Controller) ->
+  receive
+    {update, Fragment} ->
+      {NewIdleFragment, NewExecutionTree} =
+        concuerror_scheduler:update_execution_tree_opt(Fragment, ExecutionTree),
+      Controller ! {execution_tree_updated, self(), NewIdleFragment},
+      tree_manager_optimal(NewExecutionTree, Controller);
+    stop ->
+      ok;
+    E ->
+      exit(E)
+  end.
