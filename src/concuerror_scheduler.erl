@@ -4928,8 +4928,16 @@ revert_state(PreviousState, ReducedState) ->
      %% processes_ets_tables = ProcessesEtsTables,
      safe = Safe, %% safe meens that this fragment has not been distributed
      %% TODO maybe remove this
+    dpor = DPOR,
      trace = Trace
     } = ReducedState,
+  Safety =
+    case DPOR of
+      optimal ->
+        false;
+      source ->
+        Safe
+    end,
   %% ets:new(ets_transferable, [named_table, public]),
   %% maybe_create_new_tables(ProcessesEtsTables),
   NewState =
@@ -4938,7 +4946,7 @@ revert_state(PreviousState, ReducedState) ->
     last_scheduled = list_to_pid(LastScheduled),
     need_to_replay = NeedToReplay,
     origin = Origin,
-    trace = [revert_trace_state(TraceState, false) || TraceState <- Trace]
+    trace = [revert_trace_state(TraceState, Safety) || TraceState <- Trace]
    },
   %% ets:delete(ets_transferable),
   NewState.

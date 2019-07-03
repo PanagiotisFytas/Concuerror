@@ -149,6 +149,7 @@ wait_scheduler_response(Status) ->
      ownership_claims = OC,
      dpor = DPOR
     } = Status,
+  io:fwrite("Idle: ~p Busy: ~p~n", [length(IdleFrontier), length(Busy)]),
   receive
     {claim_ownership, Scheduler, Fragment, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
