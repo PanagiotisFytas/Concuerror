@@ -16,6 +16,7 @@
                             scheduling_start     :: integer(),
                             budget_exceeded = 0  :: integer(),
                             ownership_claims = 0 :: integer(),
+                            dones = 0            :: integer(),
                             budget               :: integer(),
                             dpor                 :: source | optimal
                            }).
@@ -147,6 +148,7 @@ wait_scheduler_response(Status) ->
      idle_frontier = IdleFrontier,
      budget_exceeded = BE,
      ownership_claims = OC,
+     dones = DC,
      dpor = DPOR
     } = Status,
   io:fwrite("Idle: ~p Busy: ~p~n", [length(IdleFrontier), length(Busy)]),
@@ -249,7 +251,8 @@ wait_scheduler_response(Status) ->
                         schedulers_uptime = NewUptimes,
                         busy = NewBusy,
                         execution_tree = NewExecutionTree,
-                        idle = NewIdle
+                        idle = NewIdle,
+                        dones = DC + 1
                        });
     {error_found, Scheduler, Duration, IE} ->
       NewUptimes = update_scheduler_stopped(Scheduler, Uptimes, Duration, IE),
@@ -278,7 +281,8 @@ wait_scheduler_response(Status) ->
                                         schedulers_uptime = NewUptimes,
                                         busy = NewBusy,
                                         execution_tree = NewExecutionTree,
-                                        idle = NewIdle
+                                        idle = NewIdle,
+                                        dones = DC + 1
                                        }),
       controller_loop(FinishedStatus);
     {stop, Pid} ->
@@ -457,9 +461,10 @@ report_stats_parallel(Status, Start, End) ->
   #controller_status{
      schedulers_uptime = Uptimes,
      budget_exceeded = BE,
-     ownership_claims = OC
+     ownership_claims = OC,
+     dones = DC
     } = Status,
-  io:fwrite("Budget Exceeded: ~B~nOwnership Claims: ~B~n", [BE, OC]), 
+  io:fwrite("Budget Exceeded: ~B~nOwnership Claims: ~B~nDone Claims: ~B~n", [BE, OC, DC]), 
   report_stats(Uptimes, Start, End).
 
 -spec report_stats(map(), integer(), integer()) -> ok.
